@@ -37,7 +37,13 @@ impl MetricEntry {
         let start_idx = if start <= min_timestamp {
             0
         } else {
-            match data_points.binary_search_by(|dp| dp.timestamp.cmp(&start)) {
+            match data_points.binary_search_by(|dp| {
+                if dp.timestamp >= start {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }) {
                 Ok(i) => i,
                 Err(i) => i,
             }
@@ -46,10 +52,16 @@ impl MetricEntry {
         let end_idx = if end >= max_timestamp {
             data_points.len()
         } else {
-            (match data_points.binary_search_by(|dp| end.cmp(&dp.timestamp)) {
+            match data_points.binary_search_by(|dp| {
+                if dp.timestamp > end {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }) {
                 Ok(i) => i,
                 Err(i) => i,
-            }) + 1
+            }
         };
 
         return data_points[start_idx..end_idx].to_vec();
@@ -135,6 +147,56 @@ pub mod tests {
         });
         let result = partition.select(metric, 0, 1000);
         assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_select_boundaries() {
+        let partition = MemoryPartition::new();
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 100,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 200,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 200,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 300,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 400,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 400,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 400,
+                value: 2.0,
+            },
+            DataPoint {
+                timestamp: 500,
+                value: 0.0,
+            },
+        ];
+
+        for data_point in data_points {
+            partition.insert(&Row {
+                metric: metric.to_string(),
+                data_point,
+            });
+        }
+
+        let result = partition.select(metric, 200, 400);
+        assert_eq!(result, data_points[1..7]);
     }
 
     #[test]
