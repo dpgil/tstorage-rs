@@ -1,24 +1,26 @@
-#[derive(Debug)]
-pub struct DataPoint {
-    pub timestamp: i64,
-    pub value: f64,
-}
+use crate::{
+    metric::{DataPoint, Row},
+    partition::MemoryPartition,
+};
 
-pub struct Row {
-    pub metric: String,
-    pub data_point: DataPoint,
+pub struct Storage {
+    partitions: Vec<MemoryPartition>,
 }
-
-pub struct Storage {}
 
 impl Storage {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            partitions: vec![MemoryPartition::new()],
+        }
     }
 
-    pub fn select(&self, _name: &str, _start: i64, _end: i64) -> Vec<DataPoint> {
-        vec![]
+    pub fn select(&self, name: &str, start: i64, end: i64) -> Vec<DataPoint> {
+        let partition = &self.partitions[self.partitions.len() - 1];
+        partition.select(name, start, end)
     }
 
-    pub fn insert(&self, _rows: &[Row]) {}
+    pub fn insert(&self, rows: &[Row]) {
+        let partition = &self.partitions[self.partitions.len() - 1];
+        rows.iter().for_each(|r| partition.insert(r))
+    }
 }
