@@ -1,27 +1,24 @@
-use std::sync::Mutex;
-
 use crate::metric::{DataPoint, Row};
 
 #[derive(Debug)]
 struct MetricEntry {
-    data_points: Mutex<Vec<DataPoint>>,
+    data_points: Vec<DataPoint>,
 }
 
 impl MetricEntry {
     pub fn new(data_point: DataPoint) -> Self {
         Self {
-            data_points: Mutex::new(vec![data_point]),
+            data_points: vec![data_point],
         }
     }
 
     pub fn select(&self, start: i64, end: i64) -> Vec<DataPoint> {
-        let data_points = self.data_points.lock().unwrap();
-        if data_points.is_empty() {
+        if self.data_points.is_empty() {
             return vec![];
         }
 
-        let min_timestamp = data_points[0].timestamp;
-        let max_timestamp = data_points[data_points.len() - 1].timestamp;
+        let min_timestamp = self.data_points[0].timestamp;
+        let max_timestamp = self.data_points[self.data_points.len() - 1].timestamp;
         if min_timestamp > end || max_timestamp < start {
             // Out of range
             return vec![];
@@ -30,46 +27,49 @@ impl MetricEntry {
         let start_idx = if start <= min_timestamp {
             0
         } else {
-            match data_points.binary_search_by(|dp| {
-                if dp.timestamp >= start {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Less
-                }
-            }) {
-                Ok(i) => i,
-                Err(i) => i,
-            }
+            self.data_points
+                .binary_search_by(|dp| {
+                    if dp.timestamp >= start {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Less
+                    }
+                })
+                .unwrap_or_else(|i| i)
         };
 
         let end_idx = if end >= max_timestamp {
-            data_points.len()
+            self.data_points.len()
         } else {
-            match data_points.binary_search_by(|dp| {
-                if dp.timestamp > end {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Less
-                }
-            }) {
-                Ok(i) => i,
-                Err(i) => i,
-            }
+            self.data_points
+                .binary_search_by(|dp| {
+                    if dp.timestamp > end {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Less
+                    }
+                })
+                .unwrap_or_else(|i| i)
         };
 
-        return data_points[start_idx..end_idx].to_vec();
+        return self.data_points[start_idx..end_idx].to_vec();
     }
 
     pub fn insert(&mut self, data_point: DataPoint) {
-        let data_points = self.data_points.get_mut().unwrap();
-        match data_points.is_empty() {
-            true => data_points.push(data_point),
+        match self.data_points.is_empty() {
+            true => self.data_points.push(data_point),
             false => {
-                let max_timestamp = data_points[data_points.len() - 1].timestamp;
+                let max_timestamp = self.data_points[self.data_points.len() - 1].timestamp;
                 if data_point.timestamp >= max_timestamp {
-                    data_points.push(data_point)
+                    self.data_points.push(data_point)
+                } else {
+                    // Out-of-order insert
+                    let pos = self
+                        .data_points
+                        .binary_search_by_key(&data_point.timestamp, |d| d.timestamp)
+                        .unwrap_or_else(|i| i);
+                    self.data_points.insert(pos, data_point);
                 }
-                // TODO:major: Handle out-of-order insert
             }
         }
     }
@@ -178,6 +178,19 @@ pub mod tests {
 
     use super::{MemoryPartition, PartitionBoundary};
 
+    fn create_partition_with_rows(
+        partition_duration: Option<i64>,
+        rows: &[Row],
+    ) -> MemoryPartition {
+        assert!(!rows.is_empty());
+        let (first, rest) = rows.split_first().unwrap();
+        let partition = MemoryPartition::new(partition_duration, first);
+        for row in rest {
+            partition.insert(row);
+        }
+        partition
+    }
+
     #[test]
     fn test_partition_boundary() {
         let boundaries = PartitionBoundary {
@@ -210,6 +223,40 @@ pub mod tests {
     }
 
     #[test]
+    fn test_multiple_metrics() {
+        let metric_a = "hello";
+        let data_point_a = DataPoint {
+            timestamp: 1000,
+            value: 4.20,
+        };
+        let row_a = &Row {
+            metric: metric_a.to_string(),
+            data_point: data_point_a,
+        };
+
+        let metric_b = "world";
+        let data_point_b = DataPoint {
+            timestamp: 1001,
+            value: 1.50,
+        };
+        let row_b = &Row {
+            metric: metric_b.to_string(),
+            data_point: data_point_b,
+        };
+
+        let partition = MemoryPartition::new(None, row_a);
+        partition.insert(row_b);
+
+        let result = partition.select(metric_a, 1000, 2000);
+        assert_eq!(result.len(), 1);
+        assert_eq!(data_point_a, result[0]);
+
+        let result = partition.select(metric_b, 1000, 2000);
+        assert_eq!(result.len(), 1);
+        assert_eq!(data_point_b, result[0]);
+    }
+
+    #[test]
     fn test_simple_select_out_of_range() {
         let metric = "hello";
         let row = Row {
@@ -227,11 +274,11 @@ pub mod tests {
     #[test]
     fn test_select_boundaries() {
         let metric = "hello";
-        let initial_data_point = DataPoint {
-            timestamp: 100,
-            value: 0.0,
-        };
         let data_points = [
+            DataPoint {
+                timestamp: 100,
+                value: 0.0,
+            },
             DataPoint {
                 timestamp: 200,
                 value: 0.0,
@@ -261,34 +308,28 @@ pub mod tests {
                 value: 0.0,
             },
         ];
-
-        let partition = MemoryPartition::new(
-            None,
-            &Row {
+        let rows: Vec<Row> = data_points
+            .iter()
+            .map(|dp| Row {
                 metric: metric.to_string(),
-                data_point: initial_data_point,
-            },
-        );
+                data_point: *dp,
+            })
+            .collect();
 
-        for data_point in data_points {
-            partition.insert(&Row {
-                metric: metric.to_string(),
-                data_point,
-            });
-        }
+        let partition = create_partition_with_rows(None, &rows);
 
         let result = partition.select(metric, 200, 400);
-        assert_eq!(result, data_points[0..6]);
+        assert_eq!(result, data_points[1..7]);
     }
 
     #[test]
     fn test_complex_select() {
         let metric = "hello";
-        let initial_data_point = DataPoint {
-            timestamp: 100,
-            value: 0.0,
-        };
         let data_points = [
+            DataPoint {
+                timestamp: 100,
+                value: 0.0,
+            },
             DataPoint {
                 timestamp: 200,
                 value: 0.0,
@@ -303,35 +344,30 @@ pub mod tests {
             },
         ];
 
-        let partition = MemoryPartition::new(
-            None,
-            &Row {
+        let rows: Vec<Row> = data_points
+            .iter()
+            .map(|dp| Row {
                 metric: metric.to_string(),
-                data_point: initial_data_point,
-            },
-        );
+                data_point: *dp,
+            })
+            .collect();
 
-        for data_point in data_points {
-            partition.insert(&Row {
-                metric: metric.to_string(),
-                data_point,
-            });
-        }
+        let partition = create_partition_with_rows(None, &rows);
 
         let result = partition.select(metric, 101, 300);
-        assert_eq!(result, data_points);
+        assert_eq!(result, data_points[1..]);
     }
 
     #[test]
-    fn test_out_of_order_writes() {
+    fn test_past_writes() {
         let metric = "hello";
-        let initial_data_point = DataPoint {
-            timestamp: 200,
-            value: 2.0,
-        };
         let data_points = [
             DataPoint {
-                timestamp: 100,
+                timestamp: 200, // sets the timestamp baseline for the partition
+                value: 2.0,
+            },
+            DataPoint {
+                timestamp: 100, // should belong to a previous partition
                 value: 1.0,
             },
             DataPoint {
@@ -340,22 +376,54 @@ pub mod tests {
             },
         ];
 
-        let partition = MemoryPartition::new(
-            None,
-            &Row {
+        let rows: Vec<Row> = data_points
+            .iter()
+            .map(|dp| Row {
                 metric: metric.to_string(),
-                data_point: initial_data_point,
-            },
-        );
+                data_point: *dp,
+            })
+            .collect();
 
-        for data_point in data_points {
-            partition.insert(&Row {
-                metric: metric.to_string(),
-                data_point,
-            });
-        }
+        let partition = create_partition_with_rows(None, &rows);
 
         let result = partition.select(metric, 0, 1000);
-        assert_eq!(result, vec![initial_data_point, data_points[1]]);
+        assert_eq!(result, vec![data_points[0], data_points[2]]);
+    }
+
+    #[test]
+    fn test_out_of_order_writes() {
+        let metric = "hello";
+        let mut data_points = [
+            DataPoint {
+                timestamp: 100,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 300,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 200, // out of order
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 400,
+                value: 0.0,
+            },
+        ];
+
+        let rows: Vec<Row> = data_points
+            .iter()
+            .map(|dp| Row {
+                metric: metric.to_string(),
+                data_point: *dp,
+            })
+            .collect();
+
+        let partition = create_partition_with_rows(None, &rows);
+        data_points.sort_by_key(|d| d.timestamp);
+
+        let result = partition.select(metric, 0, 1000);
+        assert_eq!(result, data_points);
     }
 }
