@@ -23,6 +23,8 @@ pub struct Config {
     insert_window: i64,
 }
 
+const NUM_WRITEABLE_PARTITIONS: i64 = 2;
+
 impl Storage {
     pub fn new(config: Config) -> Self {
         Self {
@@ -40,26 +42,46 @@ impl Storage {
         result
     }
 
+    fn create_partition_with_row(&mut self, row: &Row) {
+        self.partitions.push(MemoryPartition::new(
+            Some(self.config.partition_duration),
+            row,
+        ))
+    }
+
+    fn cascade_past_insert(&mut self, row: &Row) {
+        match self.partitions.split_last() {
+            Some((_, past_partitions)) => {
+                let mut iter = past_partitions.iter().rev();
+                let mut i = 1;
+                while i < NUM_WRITEABLE_PARTITIONS {
+                    i += 1;
+
+                    match iter.next() {
+                        Some(p) => match p.ordering(row) {
+                            PointPartitionOrdering::Current => {
+                                p.insert(row);
+                                return;
+                            }
+                            PointPartitionOrdering::Future => return,
+                            PointPartitionOrdering::Past => continue,
+                        },
+                        None => return,
+                    }
+                }
+            }
+            None => return,
+        }
+    }
+
     fn insert_row(&mut self, row: &Row) {
         match self.partitions.last() {
             Some(p) => match p.ordering(row) {
                 PointPartitionOrdering::Current => p.insert(row),
-                PointPartitionOrdering::Future => {
-                    self.partitions.push(MemoryPartition::new(
-                        Some(self.config.partition_duration),
-                        row,
-                    ));
-                }
-                PointPartitionOrdering::Past => {
-                    // TODO:major: insert into old partitions.
-                }
+                PointPartitionOrdering::Future => self.create_partition_with_row(row),
+                PointPartitionOrdering::Past => self.cascade_past_insert(row),
             },
-            None => {
-                self.partitions.push(MemoryPartition::new(
-                    Some(self.config.partition_duration),
-                    row,
-                ));
-            }
+            None => self.create_partition_with_row(row),
         }
     }
 
@@ -172,5 +194,80 @@ pub mod tests {
 
         let result = storage.select(&metric.to_string(), 0, 20);
         assert_eq!(result, vec![data_points[0], data_points[2], data_points[1]]);
+    }
+
+    #[test]
+    // The first timestamp sets the base minimum timestamp for the storage.
+    // Not my favorite solution but before we have more partitions, we drop
+    // any delayed timestamps.
+    fn test_storage_martian_point() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 100,
+            insert_window: 5,
+        });
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 10,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 5, // no partition available for this one
+                value: 0.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&[Row {
+                metric: metric.to_string(),
+                data_point,
+            }])
+        }
+
+        let result = storage.select(&metric.to_string(), 0, 20);
+        assert_eq!(result, vec![data_points[0]]);
+    }
+
+    #[test]
+    fn test_storage_insert_window_across_partitions() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 2,
+            insert_window: 5,
+        });
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 1,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 2,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 3, // start of 2nd partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 2, // within insert window, but inserted into previous partition
+                value: 1.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&[Row {
+                metric: metric.to_string(),
+                data_point,
+            }])
+        }
+
+        let result = storage.select(&metric.to_string(), 0, 20);
+
+        let mut expected = data_points.clone();
+        expected.sort_by_key(|d| d.timestamp);
+
+        assert_eq!(result, expected);
     }
 }
