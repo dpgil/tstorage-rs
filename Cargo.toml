@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.66"
 dashmap = "5.4.0"
+memmap = "0.7.0"
+thiserror = "1.0.40"

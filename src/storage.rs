@@ -69,6 +69,9 @@ impl Storage {
                         None => return,
                     }
                 }
+                // TODO:minor: non-writeable point. This means
+                // insert_window > num_writeable_partitions * partition_duration, in other words,
+                // we're accepting points that later cannot be written. We can validate this in the config.
             }
             None => return,
         }

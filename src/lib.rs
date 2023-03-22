@@ -1,4 +1,6 @@
+pub mod storage;
+
+mod disk_partition;
 mod metric;
 mod partition;
-pub mod storage;
 mod window;
