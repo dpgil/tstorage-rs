@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{self, File},
+    fs::File,
     io::{self, BufReader},
     path::Path,
 };
@@ -77,3 +77,6 @@ fn open_disk_partition(dir_path: &str) -> Result<DiskPartition, Error> {
         mapped_file: mmap,
     })
 }
+
+#[cfg(test)]
+pub mod tests {}
