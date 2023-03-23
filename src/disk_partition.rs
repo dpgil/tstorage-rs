@@ -51,7 +51,7 @@ struct DiskPartition {
 
 impl DiskPartition {}
 
-fn open_disk_partition(dir_path: &str, _retention: i64) -> Result<DiskPartition, Error> {
+fn open_disk_partition(dir_path: &str) -> Result<DiskPartition, Error> {
     if dir_path.is_empty() {
         return Err(Error::EmptyDirPathError);
     }
