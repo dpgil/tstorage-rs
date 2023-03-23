@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{self, Seek},
+    fs::{self, File},
+    io::{self, BufReader},
     path::Path,
 };
 
 use memmap::Mmap;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DATA_FILE_NAME: &str = "data";
@@ -19,8 +20,11 @@ pub enum Error {
     FileError(#[from] io::Error),
     #[error("not data points in data file")]
     NoDataPointsError,
+    #[error("error unmarshaling meta.json")]
+    UnmarshalMetaFileError(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 struct MetricMetadata {
     name: String,
     offset: i64,
@@ -29,6 +33,7 @@ struct MetricMetadata {
     num_data_points: i64,
 }
 
+#[derive(Deserialize)]
 struct PartitionMetadata {
     min_timestamp: i64,
     max_timestamp: i64,
@@ -52,7 +57,8 @@ fn open_disk_partition(dir_path: &str, _retention: i64) -> Result<DiskPartition,
     }
 
     let meta_file_path = Path::new(dir_path).join(META_FILE_NAME);
-    let meta = File::open(meta_file_path)?;
+    let meta_file = File::open(meta_file_path)?;
+    let meta: PartitionMetadata = serde_json::from_reader(BufReader::new(meta_file))?;
 
     let data_file_path = Path::new(dir_path).join(DATA_FILE_NAME);
     let data = File::open(data_file_path)?;
@@ -67,13 +73,7 @@ fn open_disk_partition(dir_path: &str, _retention: i64) -> Result<DiskPartition,
     let mmap = unsafe { memmap::Mmap::map(&data)? };
 
     Ok(DiskPartition {
-        metadata: PartitionMetadata {
-            min_timestamp: 1,
-            max_timestamp: 2,
-            num_data_points: 3,
-            metrics: HashMap::default(),
-            created_at: 5,
-        },
+        metadata: meta,
         mapped_file: mmap,
     })
 }
