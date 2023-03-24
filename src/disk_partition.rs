@@ -9,8 +9,8 @@ use memmap::Mmap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const DATA_FILE_NAME: &str = "data";
-const META_FILE_NAME: &str = "meta.json";
+pub const DATA_FILE_NAME: &str = "data";
+pub const META_FILE_NAME: &str = "meta.json";
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -25,21 +25,21 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct MetricMetadata {
-    name: String,
-    offset: i64,
-    min_timestamp: i64,
-    max_timestamp: i64,
-    num_data_points: i64,
+pub struct MetricMetadata {
+    pub name: String,
+    pub offset: i64,
+    pub min_timestamp: i64,
+    pub max_timestamp: i64,
+    pub num_data_points: i64,
 }
 
-#[derive(Deserialize)]
-struct PartitionMetadata {
-    min_timestamp: i64,
-    max_timestamp: i64,
-    num_data_points: i64,
-    metrics: HashMap<String, MetricMetadata>,
-    created_at: i64, // TODO:minor: time.Time
+#[derive(Serialize, Deserialize)]
+pub struct PartitionMetadata {
+    pub min_timestamp: i64,
+    pub max_timestamp: i64,
+    pub num_data_points: i64,
+    pub metrics: HashMap<String, MetricMetadata>,
+    pub created_at: i64, // TODO:minor: time.Time
 }
 
 // Partition that uses local disk as storage.

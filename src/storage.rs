@@ -1,8 +1,17 @@
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::{Seek, Write},
+    path::Path,
+};
+
 use crate::{
+    disk_partition::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
     metric::{DataPoint, Row},
     partition::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
 };
+use anyhow::Result;
 
 pub struct Storage {
     partitions: Vec<MemoryPartition>,
@@ -10,6 +19,7 @@ pub struct Storage {
     insert_window: InsertWindow,
 }
 
+#[derive(Default)]
 pub struct Config {
     // The size of partitions that store data points.
     // TODO:minor: use Duration.
@@ -21,6 +31,8 @@ pub struct Config {
     // An insert_window of 0 means out-of-order inserts are not
     // allowed.
     insert_window: i64,
+    // Path to where disk partitions are stored.
+    data_path: String,
 }
 
 const NUM_WRITEABLE_PARTITIONS: i64 = 2;
@@ -42,6 +54,17 @@ impl Storage {
         result
     }
 
+    pub fn insert(&mut self, rows: &[Row]) {
+        // TODO:minor: should we assume rows are sorted?
+        for row in rows {
+            if self.insert_window.contains(row.data_point.timestamp) {
+                self.insert_row(row);
+                self.insert_window.update(row.data_point.timestamp);
+            }
+            // TODO:minor: explicitly reject points outside of insert window.
+        }
+    }
+
     fn create_partition_with_row(&mut self, row: &Row) {
         self.partitions.push(MemoryPartition::new(
             Some(self.config.partition_duration),
@@ -49,7 +72,7 @@ impl Storage {
         ))
     }
 
-    fn cascade_past_insert(&mut self, row: &Row) {
+    fn cascade_past_insert(&self, row: &Row) {
         match self.partitions.split_last() {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
@@ -88,15 +111,54 @@ impl Storage {
         }
     }
 
-    pub fn insert(&mut self, rows: &[Row]) {
-        // TODO:minor: should we assume rows are sorted?
-        for row in rows {
-            if self.insert_window.contains(row.data_point.timestamp) {
-                self.insert_row(row);
-                self.insert_window.update(row.data_point.timestamp);
+    fn flush(&self, partition: MemoryPartition) -> Result<()> {
+        let dir_path = Path::new(&self.config.data_path).join(format!(
+            "p-{}-{}",
+            partition.min_timestamp(),
+            partition.max_timestamp()
+        ));
+        fs::create_dir_all(dir_path.clone())?;
+
+        let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
+        let mut data = File::create(data_file_path)?;
+        let mut metrics = HashMap::<String, MetricMetadata>::new();
+        let mut total_data_points: i64 = 0;
+        let min_timestamp = partition.min_timestamp();
+        let max_timestamp = partition.max_timestamp();
+        for (name, metric_entry) in partition.map.into_iter() {
+            let offset = data.seek(std::io::SeekFrom::Current(0))?;
+            // TODO: Pull out as CSV encoder
+            for data_point in metric_entry.data_points.iter() {
+                data.write_all(
+                    format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes(),
+                )?;
             }
-            // TODO:minor: explicitly reject points outside of insert window.
+            let num_data_points: i64 = metric_entry.data_points.len().try_into().unwrap();
+            total_data_points += num_data_points;
+            metrics.insert(
+                name.clone(),
+                MetricMetadata {
+                    name,
+                    offset: offset.try_into().unwrap(),
+                    min_timestamp: metric_entry.min_timestamp(),
+                    max_timestamp: metric_entry.max_timestamp(),
+                    num_data_points,
+                },
+            );
         }
+
+        let partition_metadata = PartitionMetadata {
+            min_timestamp,
+            max_timestamp,
+            num_data_points: total_data_points,
+            metrics,
+            created_at: 444, // TODO: Support created_at time
+        };
+        let meta_string = serde_json::to_string(&partition_metadata)?;
+        let meta_file_path = Path::new(&dir_path).join(META_FILE_NAME);
+        let mut meta = File::create(meta_file_path)?;
+        meta.write_all(meta_string.as_bytes())?;
+        Ok(())
     }
 }
 
@@ -110,7 +172,7 @@ pub mod tests {
     fn test_storage_insert_multiple_partitions() {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
-            insert_window: 0,
+            ..Default::default()
         });
 
         let metric = "hello";
@@ -166,6 +228,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
+            ..Default::default()
         });
 
         let metric = "hello";
@@ -207,6 +270,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
+            ..Default::default()
         });
 
         let metric = "hello";
@@ -237,6 +301,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
             insert_window: 5,
+            ..Default::default()
         });
 
         let metric = "hello";
