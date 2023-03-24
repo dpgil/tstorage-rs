@@ -1,14 +1,30 @@
 use crate::metric::{DataPoint, Row};
 
 #[derive(Debug)]
-struct MetricEntry {
-    data_points: Vec<DataPoint>,
+pub struct MetricEntry {
+    pub data_points: Vec<DataPoint>,
 }
 
 impl MetricEntry {
     pub fn new(data_point: DataPoint) -> Self {
         Self {
             data_points: vec![data_point],
+        }
+    }
+
+    pub fn min_timestamp(&self) -> i64 {
+        if self.data_points.is_empty() {
+            0
+        } else {
+            self.data_points[0].timestamp
+        }
+    }
+
+    pub fn max_timestamp(&self) -> i64 {
+        if self.data_points.is_empty() {
+            0
+        } else {
+            self.data_points[self.data_points.len() - 1].timestamp
         }
     }
 
@@ -114,7 +130,7 @@ impl PartitionBoundary {
 
 #[derive(Debug)]
 pub struct MemoryPartition {
-    map: dashmap::DashMap<String, MetricEntry>,
+    pub map: dashmap::DashMap<String, MetricEntry>,
     partition_boundary: PartitionBoundary,
 }
 
@@ -170,6 +186,14 @@ impl MemoryPartition {
     pub fn ordering(&self, row: &Row) -> PointPartitionOrdering {
         self.partition_boundary.ordering(row.data_point.timestamp)
     }
+
+    pub fn min_timestamp(&self) -> i64 {
+        self.partition_boundary.min_timestamp
+    }
+
+    pub fn max_timestamp(&self) -> i64 {
+        self.partition_boundary.max_timestamp
+    }
 }
 
 #[cfg(test)]
@@ -203,6 +227,22 @@ pub mod tests {
 
         assert!(!boundaries.contains_range(2000, 2001));
         assert!(!boundaries.contains_range(0, 999));
+    }
+
+    #[test]
+    fn test_min_max_timestamp() {
+        let metric = "hello";
+        let data_point = DataPoint {
+            timestamp: 1234,
+            value: 4.20,
+        };
+        let row = Row {
+            metric: metric.to_string(),
+            data_point,
+        };
+        let partition = MemoryPartition::new(Some(1000), &row);
+        assert_eq!(partition.min_timestamp(), 1234);
+        assert_eq!(partition.max_timestamp(), 2234);
     }
 
     #[test]
