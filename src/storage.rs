@@ -111,7 +111,7 @@ impl Storage {
         }
     }
 
-    fn flush(&self, partition: MemoryPartition) -> Result<()> {
+    fn flush(&self, partition: &MemoryPartition) -> Result<()> {
         let dir_path = Path::new(&self.config.data_path).join(format!(
             "p-{}-{}",
             partition.min_timestamp(),
@@ -125,7 +125,8 @@ impl Storage {
         let mut total_data_points: i64 = 0;
         let min_timestamp = partition.min_timestamp();
         let max_timestamp = partition.max_timestamp();
-        for (name, metric_entry) in partition.map.into_iter() {
+        for x in partition.map.iter() {
+            let (name, metric_entry) = x.pair();
             let offset = data.seek(std::io::SeekFrom::Current(0))?;
             // TODO: Pull out as CSV encoder
             for data_point in metric_entry.data_points.iter() {
@@ -138,7 +139,7 @@ impl Storage {
             metrics.insert(
                 name.clone(),
                 MetricMetadata {
-                    name,
+                    name: name.clone(),
                     offset: offset.try_into().unwrap(),
                     min_timestamp: metric_entry.min_timestamp(),
                     max_timestamp: metric_entry.max_timestamp(),
@@ -337,5 +338,41 @@ pub mod tests {
         expected.sort_by_key(|d| d.timestamp);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_flush() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 100,
+            insert_window: 5,
+            data_path: String::from("./data"),
+        });
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 10,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 20,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 15, // Within insert window (20-15>=5)
+                value: 0.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&[Row {
+                metric: metric.to_string(),
+                data_point,
+            }])
+        }
+        storage.flush(storage.partitions.last().unwrap());
+
+        // let result = storage.select(&metric.to_string(), 0, 20);
+        // assert_eq!(result, vec![data_points[0], data_points[2], data_points[1]]);
     }
 }
