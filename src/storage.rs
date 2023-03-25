@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     disk_partition::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
+    encode::{csv_encode, EncodeFn, Encoder},
     metric::{DataPoint, Row},
     partition::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
@@ -17,6 +18,7 @@ pub struct Storage {
     partitions: Vec<MemoryPartition>,
     config: Config,
     insert_window: InsertWindow,
+    encode_fn: EncodeFn,
 }
 
 #[derive(Default)]
@@ -33,6 +35,8 @@ pub struct Config {
     insert_window: i64,
     // Path to where disk partitions are stored.
     data_path: String,
+    // Type of encoder for data point encoding.
+    encoder: Encoder,
 }
 
 const NUM_WRITEABLE_PARTITIONS: i64 = 2;
@@ -42,6 +46,7 @@ impl Storage {
         Self {
             partitions: vec![],
             insert_window: InsertWindow::new(config.insert_window),
+            encode_fn: EncodeFn::from(config.encoder),
             config,
         }
     }
@@ -127,13 +132,10 @@ impl Storage {
         let max_timestamp = partition.max_timestamp();
         for x in partition.map.iter() {
             let (name, metric_entry) = x.pair();
+            // Find the current offset in the file, since we don't know how much
+            // the encoder moved the pointer.
             let offset = data.seek(std::io::SeekFrom::Current(0))?;
-            // TODO: Pull out as CSV encoder
-            for data_point in metric_entry.data_points.iter() {
-                data.write_all(
-                    format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes(),
-                )?;
-            }
+            (self.encode_fn)(&mut data, metric_entry)?;
             let num_data_points: i64 = metric_entry.data_points.len().try_into().unwrap();
             total_data_points += num_data_points;
             metrics.insert(
@@ -169,6 +171,7 @@ pub mod tests {
 
     use crate::{
         disk_partition::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
+        encode::Encoder,
         metric::{DataPoint, Row},
     };
 
@@ -352,6 +355,7 @@ pub mod tests {
             partition_duration: 100,
             insert_window: 5,
             data_path: data_path.clone(),
+            encoder: Encoder::CSV,
         });
 
         let metric = "hello";
