@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Seek, Write},
+    io::Write,
     path::Path,
 };
 
 use crate::{
     disk_partition::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
-    encode::{csv_encode, EncodeFn, Encoder},
+    encode::{get_encoder, EncodeStrategy, Encoder},
     metric::{DataPoint, Row},
     partition::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
@@ -18,7 +18,6 @@ pub struct Storage {
     partitions: Vec<MemoryPartition>,
     config: Config,
     insert_window: InsertWindow,
-    encode_fn: EncodeFn,
 }
 
 #[derive(Default)]
@@ -36,7 +35,7 @@ pub struct Config {
     // Path to where disk partitions are stored.
     data_path: String,
     // Type of encoder for data point encoding.
-    encoder: Encoder,
+    encode_strategy: EncodeStrategy,
 }
 
 const NUM_WRITEABLE_PARTITIONS: i64 = 2;
@@ -46,7 +45,6 @@ impl Storage {
         Self {
             partitions: vec![],
             insert_window: InsertWindow::new(config.insert_window),
-            encode_fn: EncodeFn::from(config.encoder),
             config,
         }
     }
@@ -125,7 +123,8 @@ impl Storage {
         fs::create_dir_all(dir_path.clone())?;
 
         let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
-        let mut data = File::create(data_file_path)?;
+        let data = File::create(data_file_path)?;
+        let mut encoder = get_encoder(self.config.encode_strategy, data);
         let mut metrics = HashMap::<String, MetricMetadata>::new();
         let mut total_data_points: i64 = 0;
         let min_timestamp = partition.min_timestamp();
@@ -134,8 +133,10 @@ impl Storage {
             let (name, metric_entry) = x.pair();
             // Find the current offset in the file, since we don't know how much
             // the encoder moved the pointer.
-            let offset = data.seek(std::io::SeekFrom::Current(0))?;
-            (self.encode_fn)(&mut data, metric_entry)?;
+            let offset = encoder.get_current_offset().unwrap();
+            for data_point in metric_entry.data_points.iter() {
+                encoder.encode_point(data_point)?;
+            }
             let num_data_points: i64 = metric_entry.data_points.len().try_into().unwrap();
             total_data_points += num_data_points;
             metrics.insert(
@@ -171,7 +172,7 @@ pub mod tests {
 
     use crate::{
         disk_partition::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
-        encode::Encoder,
+        encode::EncodeStrategy,
         metric::{DataPoint, Row},
     };
 
@@ -355,7 +356,7 @@ pub mod tests {
             partition_duration: 100,
             insert_window: 5,
             data_path: data_path.clone(),
-            encoder: Encoder::CSV,
+            encode_strategy: EncodeStrategy::CSV,
         });
 
         let metric = "hello";
