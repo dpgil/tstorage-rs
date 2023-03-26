@@ -2,7 +2,10 @@ use crate::{
     encode::encode::{Decoder, Encoder},
     metric::DataPoint,
 };
-use std::io::{BufReader, BufWriter, Read, Result, Seek, Write};
+use std::{
+    cmp::min,
+    io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Result, Seek, Write},
+};
 
 pub struct CsvEncoder<W: Write + Seek> {
     pub writer: BufWriter<W>,
@@ -45,11 +48,26 @@ impl<R: Read> CsvDecoder<R> {
 
 impl<R: Read> Decoder for CsvDecoder<R> {
     fn decode_point(&mut self) -> Result<DataPoint> {
-        // TODO(dpgil)
-        Ok(DataPoint {
-            timestamp: 123,
-            value: 456.,
-        })
+        let mut buf = String::new();
+        self.reader.read_line(&mut buf)?;
+
+        let parts: Vec<&str> = buf.trim_end().split(',').collect();
+        let (ts, val) = match parts.len() {
+            2 => Ok((parts[0], parts[1])),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("expected two rows per line: {:?}", parts),
+            )),
+        }?;
+
+        let timestamp: i64 = ts
+            .parse()
+            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+        let value: f64 = val
+            .parse()
+            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+
+        Ok(DataPoint { timestamp, value })
     }
 }
 
@@ -66,7 +84,16 @@ impl FakeFile {
 }
 
 impl Seek for FakeFile {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+    fn seek(&mut self, seek_from: std::io::SeekFrom) -> Result<u64> {
+        match seek_from {
+            std::io::SeekFrom::Start(p) => self.pos = p,
+            std::io::SeekFrom::End(p) => {
+                let len: u64 = self.buf.len().try_into().unwrap();
+                let delta: u64 = p.try_into().unwrap();
+                self.pos = len - delta
+            }
+            std::io::SeekFrom::Current(_) => {}
+        }
         Ok(self.pos)
     }
 }
@@ -84,11 +111,28 @@ impl Write for FakeFile {
     }
 }
 
+impl Read for FakeFile {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let curr_pos: usize = self.pos.try_into().unwrap();
+        let count = min(buf.len(), self.buf.len() - curr_pos);
+        for i in 0..count {
+            buf[i] = self.buf[curr_pos + i];
+        }
+        self.pos = (curr_pos + count).try_into().unwrap();
+        Ok(count)
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
-    use crate::{encode::encode::Encoder, metric::DataPoint};
+    use std::io::Seek;
 
-    use super::{CsvEncoder, FakeFile};
+    use crate::{
+        encode::encode::{Decoder, Encoder},
+        metric::DataPoint,
+    };
+
+    use super::{CsvDecoder, CsvEncoder, FakeFile};
 
     #[test]
     fn test_encode() {
@@ -101,6 +145,7 @@ pub mod tests {
                 value: 1.0,
             })
             .unwrap();
+        encoder.flush().unwrap();
         let fake_file = encoder.writer.into_inner().unwrap();
         assert_eq!(fake_file.buf, b"123,1\n");
     }
@@ -126,5 +171,23 @@ pub mod tests {
         assert_eq!(encoder.get_current_offset().unwrap(), 12); // "123,1\n456,2\n".len()
         let fake_file = encoder.writer.into_inner().unwrap();
         assert_eq!(fake_file.buf, b"123,1\n456,2\n");
+    }
+
+    #[test]
+    fn test_decode() {
+        let data_point = DataPoint {
+            timestamp: 123,
+            value: 1.0,
+        };
+        let buf = Vec::new();
+        let fake_file = FakeFile::new(buf);
+        let mut encoder = CsvEncoder::new(fake_file);
+        encoder.encode_point(&data_point).unwrap();
+        encoder.flush().unwrap();
+        let mut fake_file = encoder.writer.into_inner().unwrap();
+        fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let mut decoder = CsvDecoder::new(fake_file);
+        let actual = decoder.decode_point().unwrap();
+        assert_eq!(actual, data_point);
     }
 }
