@@ -1,5 +1,5 @@
 use crate::{
-    encode::{Decoder, Encoder},
+    encode::encode::{Decoder, Encoder},
     metric::DataPoint,
 };
 use std::io::{BufReader, BufWriter, Read, Result, Seek, Write};
@@ -86,7 +86,7 @@ impl Write for FakeFile {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::{encode::Encoder, metric::DataPoint};
+    use crate::{encode::encode::Encoder, metric::DataPoint};
 
     use super::{CsvEncoder, FakeFile};
 

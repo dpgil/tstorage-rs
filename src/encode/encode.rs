@@ -2,7 +2,7 @@ use std::io::{Read, Result, Seek, Write};
 
 use crate::metric::DataPoint;
 
-use crate::csv::{CsvDecoder, CsvEncoder};
+use crate::encode::csv::{CsvDecoder, CsvEncoder};
 
 #[derive(Clone, Copy, Default)]
 pub enum EncodeStrategy {

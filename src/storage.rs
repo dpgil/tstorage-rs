@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     disk_partition::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
-    encode::{get_encoder, EncodeStrategy, Encoder},
+    encode::encode::{get_encoder, EncodeStrategy, Encoder},
     metric::{DataPoint, Row},
     partition::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
@@ -173,7 +173,7 @@ pub mod tests {
 
     use crate::{
         disk_partition::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
-        encode::EncodeStrategy,
+        encode::encode::EncodeStrategy,
         metric::{DataPoint, Row},
     };
 
