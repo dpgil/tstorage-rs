@@ -6,10 +6,10 @@ use std::{
 };
 
 use crate::{
-    disk_partition::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
     encode::encode::{get_encoder, EncodeStrategy, Encoder},
     metric::{DataPoint, Row},
-    partition::{MemoryPartition, PointPartitionOrdering},
+    partition::disk::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
+    partition::memory::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
 };
 use anyhow::Result;
@@ -114,6 +114,7 @@ impl Storage {
         }
     }
 
+    // TODO: Move to memory partition struct.
     fn flush(&self, partition: &MemoryPartition) -> Result<()> {
         let dir_path = Path::new(&self.config.data_path).join(format!(
             "p-{}-{}",
@@ -175,9 +176,9 @@ pub mod tests {
     use std::{fs, path::Path};
 
     use crate::{
-        disk_partition::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
         encode::encode::EncodeStrategy,
         metric::{DataPoint, Row},
+        partition::disk::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
     };
 
     use super::{Config, Storage};

@@ -1,6 +1,74 @@
 use crate::metric::{DataPoint, Row};
 
 #[derive(Debug)]
+pub struct MemoryPartition {
+    pub map: dashmap::DashMap<String, MetricEntry>,
+    partition_boundary: PartitionBoundary,
+}
+
+impl MemoryPartition {
+    // Requiring a row to initialize the partition makes the initialization uglier,
+    // but allows us to guarantee the partition boundaries in the rest of the code.
+    pub fn new(partition_duration: Option<i64>, initial_row: &Row) -> Self {
+        let partition_duration = partition_duration.unwrap_or(60000);
+        let partition_boundary = PartitionBoundary {
+            min_timestamp: initial_row.data_point.timestamp,
+            max_timestamp: initial_row.data_point.timestamp + partition_duration,
+        };
+
+        let map = dashmap::DashMap::new();
+        map.insert(
+            initial_row.metric.clone(),
+            MetricEntry::new(initial_row.data_point),
+        );
+
+        Self {
+            map,
+            partition_boundary,
+        }
+    }
+
+    pub fn select(&self, name: &str, start: i64, end: i64) -> Vec<DataPoint> {
+        match self.partition_boundary.contains_range(start, end) {
+            true => match self.map.get(name) {
+                Some(entry) => entry.select(start, end),
+                None => vec![],
+            },
+            false => vec![],
+        }
+    }
+
+    pub fn insert(&self, row: &Row) {
+        if self
+            .partition_boundary
+            .contains_point(row.data_point.timestamp)
+        {
+            match self.map.get_mut(&row.metric) {
+                Some(mut m) => {
+                    m.insert(row.data_point);
+                }
+                None => {
+                    self.map
+                        .insert(row.metric.clone(), MetricEntry::new(row.data_point));
+                }
+            };
+        }
+    }
+
+    pub fn ordering(&self, row: &Row) -> PointPartitionOrdering {
+        self.partition_boundary.ordering(row.data_point.timestamp)
+    }
+
+    pub fn min_timestamp(&self) -> i64 {
+        self.partition_boundary.min_timestamp
+    }
+
+    pub fn max_timestamp(&self) -> i64 {
+        self.partition_boundary.max_timestamp
+    }
+}
+
+#[derive(Debug)]
 pub struct MetricEntry {
     pub data_points: Vec<DataPoint>,
 }
@@ -125,74 +193,6 @@ impl PartitionBoundary {
         }
 
         return PointPartitionOrdering::Current;
-    }
-}
-
-#[derive(Debug)]
-pub struct MemoryPartition {
-    pub map: dashmap::DashMap<String, MetricEntry>,
-    partition_boundary: PartitionBoundary,
-}
-
-impl MemoryPartition {
-    // Requiring a row to initialize the partition makes the initialization uglier,
-    // but allows us to guarantee the partition boundaries in the rest of the code.
-    pub fn new(partition_duration: Option<i64>, initial_row: &Row) -> Self {
-        let partition_duration = partition_duration.unwrap_or(60000);
-        let partition_boundary = PartitionBoundary {
-            min_timestamp: initial_row.data_point.timestamp,
-            max_timestamp: initial_row.data_point.timestamp + partition_duration,
-        };
-
-        let map = dashmap::DashMap::new();
-        map.insert(
-            initial_row.metric.clone(),
-            MetricEntry::new(initial_row.data_point),
-        );
-
-        Self {
-            map,
-            partition_boundary,
-        }
-    }
-
-    pub fn select(&self, name: &str, start: i64, end: i64) -> Vec<DataPoint> {
-        match self.partition_boundary.contains_range(start, end) {
-            true => match self.map.get(name) {
-                Some(entry) => entry.select(start, end),
-                None => vec![],
-            },
-            false => vec![],
-        }
-    }
-
-    pub fn insert(&self, row: &Row) {
-        if self
-            .partition_boundary
-            .contains_point(row.data_point.timestamp)
-        {
-            match self.map.get_mut(&row.metric) {
-                Some(mut m) => {
-                    m.insert(row.data_point);
-                }
-                None => {
-                    self.map
-                        .insert(row.metric.clone(), MetricEntry::new(row.data_point));
-                }
-            };
-        }
-    }
-
-    pub fn ordering(&self, row: &Row) -> PointPartitionOrdering {
-        self.partition_boundary.ordering(row.data_point.timestamp)
-    }
-
-    pub fn min_timestamp(&self) -> i64 {
-        self.partition_boundary.min_timestamp
-    }
-
-    pub fn max_timestamp(&self) -> i64 {
-        self.partition_boundary.max_timestamp
     }
 }
 
