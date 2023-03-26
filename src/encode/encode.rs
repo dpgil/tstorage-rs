@@ -1,10 +1,12 @@
 use std::io::{Read, Result, Seek, Write};
 
+use serde::{Deserialize, Serialize};
+
 use crate::metric::DataPoint;
 
 use crate::encode::csv::{CsvDecoder, CsvEncoder};
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
 pub enum EncodeStrategy {
     #[default]
     CSV,

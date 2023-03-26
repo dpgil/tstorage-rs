@@ -1,0 +1,1 @@
+{"min_timestamp":10,"max_timestamp":110,"num_data_points":6,"metrics":{"request_latency":{"name":"request_latency","start_offset":0,"end_offset":20,"min_timestamp":10,"max_timestamp":20,"num_data_points":3},"hello":{"name":"hello","start_offset":20,"end_offset":39,"min_timestamp":10,"max_timestamp":20,"num_data_points":3}},"created_at":444,"encode_strategy":"CSV"}

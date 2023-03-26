@@ -126,24 +126,26 @@ impl Storage {
         let data = File::create(data_file_path)?;
         let mut encoder = get_encoder(self.config.encode_strategy, data);
         let mut metrics = HashMap::<String, MetricMetadata>::new();
-        let mut total_data_points: i64 = 0;
+        let mut total_data_points = 0;
         let min_timestamp = partition.min_timestamp();
         let max_timestamp = partition.max_timestamp();
         for x in partition.map.iter() {
             let (name, metric_entry) = x.pair();
             // Find the current offset in the file, since we don't know how much
             // the encoder moved the pointer.
-            let offset = encoder.get_current_offset().unwrap();
+            let start_offset = encoder.get_current_offset().unwrap();
             for data_point in metric_entry.data_points.iter() {
                 encoder.encode_point(data_point)?;
             }
-            let num_data_points: i64 = metric_entry.data_points.len().try_into().unwrap();
+            let end_offset = encoder.get_current_offset().unwrap();
+            let num_data_points = metric_entry.data_points.len();
             total_data_points += num_data_points;
             metrics.insert(
                 name.clone(),
                 MetricMetadata {
                     name: name.clone(),
-                    offset: offset.try_into().unwrap(),
+                    start_offset: start_offset.try_into().unwrap(),
+                    end_offset: end_offset.try_into().unwrap(),
                     min_timestamp: metric_entry.min_timestamp(),
                     max_timestamp: metric_entry.max_timestamp(),
                     num_data_points,
@@ -158,6 +160,7 @@ impl Storage {
             num_data_points: total_data_points,
             metrics,
             created_at: 444, // TODO: Support created_at time
+            encode_strategy: self.config.encode_strategy,
         };
         let meta_string = serde_json::to_string(&partition_metadata)?;
         let meta_file_path = Path::new(&dir_path).join(META_FILE_NAME);
