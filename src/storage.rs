@@ -150,6 +150,7 @@ impl Storage {
                 },
             );
         }
+        encoder.flush()?;
 
         let partition_metadata = PartitionMetadata {
             min_timestamp,

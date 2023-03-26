@@ -1,6 +1,8 @@
-use std::io::{BufWriter, Result, Seek, Write};
+use std::io::{Read, Result, Seek, Write};
 
 use crate::metric::DataPoint;
+
+use crate::csv::{CsvDecoder, CsvEncoder};
 
 #[derive(Clone, Copy, Default)]
 pub enum EncodeStrategy {
@@ -9,14 +11,13 @@ pub enum EncodeStrategy {
 }
 
 pub trait Encoder {
-    // TODO: Refactor encode function to return bytes rather than write
-    // directly to the file, for easier testing.
     fn encode_point(&mut self, data_point: &DataPoint) -> Result<()>;
-    // TODO: decode bytes to metric entry.
-    // encode and decode should be inverse functions.
-    // fn decode(&self, bytes: &[u8]) -> MetricEntry;
-    // TODO: Does it make sense to expect the encoder to provide this?
     fn get_current_offset(&mut self) -> Result<u64>;
+    fn flush(&mut self) -> Result<()>;
+}
+
+pub trait Decoder {
+    fn decode_point(&mut self) -> Result<DataPoint>;
 }
 
 pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writeable: W) -> impl Encoder {
@@ -25,25 +26,8 @@ pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writeable: 
     }
 }
 
-pub struct CsvEncoder<W: Write + Seek> {
-    writer: BufWriter<W>,
-}
-
-impl<W: Write + Seek> CsvEncoder<W> {
-    fn new(writeable: W) -> Self {
-        Self {
-            writer: BufWriter::new(writeable),
-        }
-    }
-}
-
-impl<W: Write + Seek> Encoder for CsvEncoder<W> {
-    fn encode_point(&mut self, data_point: &DataPoint) -> Result<()> {
-        self.writer
-            .write_all(format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes())
-    }
-
-    fn get_current_offset(&mut self) -> Result<u64> {
-        self.writer.seek(std::io::SeekFrom::Current(0))
+pub fn get_decoder<R: Read>(encode_strategy: EncodeStrategy, readable: R) -> impl Decoder {
+    match encode_strategy {
+        EncodeStrategy::CSV => CsvDecoder::new(readable),
     }
 }
