@@ -34,3 +34,9 @@ metricB | 2
 ```
 
 I may not want to allow a data point with timestamp=1 to be inserted for metricA, however it may not be as much of a performance problem to insert it for metricB. Supporting the insert window per metric could allow for more data points to be inserted out of order. However, this could mean two data points with the same timestamps could be sent to the database, with only one of them being written. This makes the inserts harder to reason about. In addition, we'd have to remove the partition boundary optimization and look into each metric entry to determine whether a data point could be inserted. A global limit seems like the easiest path forward even though it is stricter.
+
+## Drawbacks
+
+### Point far into the future
+
+If rstorage receives an anomalous data point far into the future, it'll create a new partition for it, and will make the old partitions unwriteable, depending on the number of writeable partitions. Ideally th system would provide an option to reject data points more than some time in the future, just like there's an insert window for old data points.

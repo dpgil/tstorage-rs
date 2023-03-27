@@ -1,18 +1,9 @@
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::Write,
-    path::Path,
-};
-
 use crate::{
-    encode::encode::{get_encoder, EncodeStrategy, Encoder},
+    encode::encode::EncodeStrategy,
     metric::{DataPoint, Row},
-    partition::disk::{MetricMetadata, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
     partition::memory::{MemoryPartition, PointPartitionOrdering},
     window::InsertWindow,
 };
-use anyhow::Result;
 
 pub struct Storage {
     partitions: Vec<MemoryPartition>,
@@ -113,73 +104,11 @@ impl Storage {
             None => self.create_partition_with_row(row),
         }
     }
-
-    // TODO: Move to memory partition struct.
-    fn flush(&self, partition: &MemoryPartition) -> Result<()> {
-        let dir_path = Path::new(&self.config.data_path).join(format!(
-            "p-{}-{}",
-            partition.min_timestamp(),
-            partition.max_timestamp()
-        ));
-        fs::create_dir_all(dir_path.clone())?;
-
-        let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
-        let data = File::create(data_file_path)?;
-        let mut encoder = get_encoder(self.config.encode_strategy, data);
-        let mut metrics = HashMap::<String, MetricMetadata>::new();
-        let mut total_data_points = 0;
-        let min_timestamp = partition.min_timestamp();
-        let max_timestamp = partition.max_timestamp();
-        for x in partition.map.iter() {
-            let (name, metric_entry) = x.pair();
-            // Find the current offset in the file, since we don't know how much
-            // the encoder moved the pointer.
-            let start_offset = encoder.get_current_offset().unwrap();
-            for data_point in metric_entry.data_points.iter() {
-                encoder.encode_point(data_point)?;
-            }
-            let end_offset = encoder.get_current_offset().unwrap();
-            let num_data_points = metric_entry.data_points.len();
-            total_data_points += num_data_points;
-            metrics.insert(
-                name.clone(),
-                MetricMetadata {
-                    name: name.clone(),
-                    start_offset: start_offset.try_into().unwrap(),
-                    end_offset: end_offset.try_into().unwrap(),
-                    min_timestamp: metric_entry.min_timestamp(),
-                    max_timestamp: metric_entry.max_timestamp(),
-                    num_data_points,
-                },
-            );
-        }
-        encoder.flush()?;
-
-        let partition_metadata = PartitionMetadata {
-            min_timestamp,
-            max_timestamp,
-            num_data_points: total_data_points,
-            metrics,
-            created_at: 444, // TODO: Support created_at time
-            encode_strategy: self.config.encode_strategy,
-        };
-        let meta_string = serde_json::to_string(&partition_metadata)?;
-        let meta_file_path = Path::new(&dir_path).join(META_FILE_NAME);
-        let mut meta = File::create(meta_file_path)?;
-        meta.write_all(meta_string.as_bytes())?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use std::{fs, path::Path};
-
-    use crate::{
-        encode::encode::EncodeStrategy,
-        metric::{DataPoint, Row},
-        partition::disk::{PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
-    };
+    use crate::metric::{DataPoint, Row};
 
     use super::{Config, Storage};
 
@@ -352,53 +281,5 @@ pub mod tests {
         expected.sort_by_key(|d| d.timestamp);
 
         assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_flush() {
-        let data_path = String::from("./test_flush_data");
-        let mut storage = Storage::new(Config {
-            partition_duration: 100,
-            insert_window: 5,
-            data_path: data_path.clone(),
-            encode_strategy: EncodeStrategy::CSV,
-        });
-
-        let metric = "hello";
-        let data_points = [
-            DataPoint {
-                timestamp: 10,
-                value: 0.0,
-            },
-            DataPoint {
-                timestamp: 15,
-                value: 0.052,
-            },
-            DataPoint {
-                timestamp: 20,
-                value: 1.0,
-            },
-        ];
-
-        for data_point in data_points {
-            storage.insert(&[Row {
-                metric: metric.to_string(),
-                data_point,
-            }])
-        }
-        storage.flush(storage.partitions.last().unwrap()).unwrap();
-
-        // p-10-110 because first timestamp is 10 and partition duration is 100.
-        let dir_name = Path::new(&data_path).join("p-10-110");
-        let data = fs::read_to_string(dir_name.join(DATA_FILE_NAME)).unwrap();
-        assert_eq!(data, String::from("10,0\n15,0.052\n20,1\n"));
-
-        let meta = fs::read_to_string(dir_name.join(META_FILE_NAME)).unwrap();
-        let meta_obj: PartitionMetadata = serde_json::from_str(&meta).unwrap();
-        assert_eq!(meta_obj.min_timestamp, 10);
-        assert_eq!(meta_obj.max_timestamp, 110);
-        assert_eq!(meta_obj.num_data_points, 3);
-
-        fs::remove_dir_all(data_path).unwrap();
     }
 }
