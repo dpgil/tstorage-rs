@@ -15,18 +15,18 @@ pub struct Storage {
 pub struct Config {
     // The size of partitions that store data points.
     // TODO:minor: use Duration.
-    partition_duration: i64,
+    pub partition_duration: i64,
     // Tolerance for inserting out-of-order data points.
     // Given the last data point inserted with timestamp t,
     // the insert window will allow a data point with a timestamp
     // in the past up to t - insert_window.
     // An insert_window of 0 means out-of-order inserts are not
     // allowed.
-    insert_window: i64,
+    pub insert_window: i64,
     // Path to where disk partitions are stored.
-    data_path: String,
+    pub data_path: String,
     // Type of encoder for data point encoding.
-    encode_strategy: EncodeStrategy,
+    pub encode_strategy: EncodeStrategy,
 }
 
 const NUM_WRITEABLE_PARTITIONS: i64 = 2;
@@ -156,10 +156,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row {
-                metric: metric.to_string(),
-                data_point,
-            }])
+            storage.insert(&[Row { metric, data_point }])
         }
         assert_eq!(storage.partitions.len(), 3);
 
@@ -196,10 +193,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row {
-                metric: metric.to_string(),
-                data_point,
-            }])
+            storage.insert(&[Row { metric, data_point }])
         }
 
         let result = storage.select(&metric.to_string(), 0, 20);
@@ -230,10 +224,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row {
-                metric: metric.to_string(),
-                data_point,
-            }])
+            storage.insert(&[Row { metric, data_point }])
         }
 
         let result = storage.select(&metric.to_string(), 0, 20);
@@ -269,10 +260,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row {
-                metric: metric.to_string(),
-                data_point,
-            }])
+            storage.insert(&[Row { metric, data_point }])
         }
 
         let result = storage.select(&metric.to_string(), 0, 20);

@@ -232,7 +232,7 @@ pub mod tests {
             },
         ]
         .map(|d| Row {
-            metric: metric.to_string(),
+            metric,
             data_point: d,
         });
         let partition = MemoryPartition::new(Some(100), &rows[0]);

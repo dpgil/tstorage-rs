@@ -10,7 +10,7 @@ Local time series storage in Rust. Modeled after nakabonne/tstorage.
 - ~~Support in-memory partitions~~
 - ~~Support out-of-order data points~~
 - Support WAL
-- Support benchmarks
+- ~~Support benchmarks~~
 - Support disk partitions
 - Support Gorilla compression in disk partitions
 

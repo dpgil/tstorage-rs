@@ -4,7 +4,7 @@ pub struct DataPoint {
     pub value: f64,
 }
 
-pub struct Row {
-    pub metric: String,
+pub struct Row<'a> {
+    pub metric: &'a str,
     pub data_point: DataPoint,
 }

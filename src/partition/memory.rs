@@ -18,7 +18,7 @@ impl MemoryPartition {
 
         let map = dashmap::DashMap::new();
         map.insert(
-            initial_row.metric.clone(),
+            initial_row.metric.to_string(),
             MetricEntry::new(initial_row.data_point),
         );
 
@@ -43,13 +43,13 @@ impl MemoryPartition {
             .partition_boundary
             .contains_point(row.data_point.timestamp)
         {
-            match self.map.get_mut(&row.metric) {
+            match self.map.get_mut(row.metric) {
                 Some(mut m) => {
                     m.insert(row.data_point);
                 }
                 None => {
                     self.map
-                        .insert(row.metric.clone(), MetricEntry::new(row.data_point));
+                        .insert(row.metric.to_string(), MetricEntry::new(row.data_point));
                 }
             };
         }
@@ -236,10 +236,7 @@ pub mod tests {
             timestamp: 1234,
             value: 4.20,
         };
-        let row = Row {
-            metric: metric.to_string(),
-            data_point,
-        };
+        let row = Row { metric, data_point };
         let partition = MemoryPartition::new(Some(1000), &row);
         assert_eq!(partition.min_timestamp(), 1234);
         assert_eq!(partition.max_timestamp(), 2234);
@@ -252,10 +249,7 @@ pub mod tests {
             timestamp: 1234,
             value: 4.20,
         };
-        let row = Row {
-            metric: metric.to_string(),
-            data_point,
-        };
+        let row = Row { metric, data_point };
         let partition = MemoryPartition::new(None, &row);
         let result = partition.select(metric, 1000, 2000);
         assert_eq!(result.len(), 1);
@@ -270,7 +264,7 @@ pub mod tests {
             value: 4.20,
         };
         let row_a = &Row {
-            metric: metric_a.to_string(),
+            metric: metric_a,
             data_point: data_point_a,
         };
 
@@ -280,7 +274,7 @@ pub mod tests {
             value: 1.50,
         };
         let row_b = &Row {
-            metric: metric_b.to_string(),
+            metric: metric_b,
             data_point: data_point_b,
         };
 
@@ -300,7 +294,7 @@ pub mod tests {
     fn test_simple_select_out_of_range() {
         let metric = "hello";
         let row = Row {
-            metric: metric.to_string(),
+            metric,
             data_point: DataPoint {
                 timestamp: 1234,
                 value: 4.20,
@@ -351,7 +345,7 @@ pub mod tests {
         let rows: Vec<Row> = data_points
             .iter()
             .map(|dp| Row {
-                metric: metric.to_string(),
+                metric,
                 data_point: *dp,
             })
             .collect();
@@ -387,7 +381,7 @@ pub mod tests {
         let rows: Vec<Row> = data_points
             .iter()
             .map(|dp| Row {
-                metric: metric.to_string(),
+                metric,
                 data_point: *dp,
             })
             .collect();
@@ -419,7 +413,7 @@ pub mod tests {
         let rows: Vec<Row> = data_points
             .iter()
             .map(|dp| Row {
-                metric: metric.to_string(),
+                metric,
                 data_point: *dp,
             })
             .collect();
@@ -455,7 +449,7 @@ pub mod tests {
         let rows: Vec<Row> = data_points
             .iter()
             .map(|dp| Row {
-                metric: metric.to_string(),
+                metric,
                 data_point: *dp,
             })
             .collect();
