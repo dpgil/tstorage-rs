@@ -1,44 +1,28 @@
+use std::path::Path;
+
 use crate::metric::{DataPoint, Row};
+use anyhow::Result;
+
+use super::{Partition, Boundary, PointPartitionOrdering, disk::flush};
 
 #[derive(Debug)]
 pub struct MemoryPartition {
     pub map: dashmap::DashMap<String, MetricEntry>,
-    partition_boundary: PartitionBoundary,
+    partition_boundary: Boundary,
 }
 
-impl MemoryPartition {
-    // Requiring a row to initialize the partition makes the initialization uglier,
-    // but allows us to guarantee the partition boundaries in the rest of the code.
-    pub fn new(partition_duration: Option<i64>, initial_row: &Row) -> Self {
-        let partition_duration = partition_duration.unwrap_or(60000);
-        let partition_boundary = PartitionBoundary {
-            min_timestamp: initial_row.data_point.timestamp,
-            max_timestamp: initial_row.data_point.timestamp + partition_duration,
-        };
-
-        let map = dashmap::DashMap::new();
-        map.insert(
-            initial_row.metric.to_string(),
-            MetricEntry::new(initial_row.data_point),
-        );
-
-        Self {
-            map,
-            partition_boundary,
-        }
-    }
-
-    pub fn select(&self, name: &str, start: i64, end: i64) -> Vec<DataPoint> {
-        match self.partition_boundary.contains_range(start, end) {
+impl Partition for MemoryPartition {
+    fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
+        Ok(match self.partition_boundary.contains_range(start, end) {
             true => match self.map.get(name) {
                 Some(entry) => entry.select(start, end),
                 None => vec![],
             },
             false => vec![],
-        }
+        })
     }
 
-    pub fn insert(&self, row: &Row) {
+    fn insert(&self, row: &Row) {
         if self
             .partition_boundary
             .contains_point(row.data_point.timestamp)
@@ -55,8 +39,39 @@ impl MemoryPartition {
         }
     }
 
-    pub fn ordering(&self, row: &Row) -> PointPartitionOrdering {
+    fn ordering(&self, row: &Row) -> PointPartitionOrdering {
         self.partition_boundary.ordering(row.data_point.timestamp)
+    }
+
+    fn flush(&self, dir_path: &Path, encode_strategy: crate::EncodeStrategy) -> Result<()> {
+        flush(self, dir_path, encode_strategy)
+    }
+
+    fn boundary(&self) -> Boundary {
+        self.partition_boundary
+    }
+}
+
+impl MemoryPartition {
+    // Requiring a row to initialize the partition makes the initialization uglier,
+    // but allows us to guarantee the partition boundaries in the rest of the code.
+    pub fn new(partition_duration: Option<i64>, initial_row: &Row) -> Self {
+        let partition_duration = partition_duration.unwrap_or(60000);
+        let partition_boundary = Boundary {
+            min_timestamp: initial_row.data_point.timestamp,
+            max_timestamp: initial_row.data_point.timestamp + partition_duration,
+        };
+
+        let map = dashmap::DashMap::new();
+        map.insert(
+            initial_row.metric.to_string(),
+            MetricEntry::new(initial_row.data_point),
+        );
+
+        Self {
+            map,
+            partition_boundary,
+        }
     }
 
     pub fn min_timestamp(&self) -> i64 {
@@ -159,48 +174,14 @@ impl MetricEntry {
     }
 }
 
-// Terrible naming, but this represents whether a point belongs in
-// a particular parition, or it belongs in a later one (future) or
-// an earlier one (past).
-pub enum PointPartitionOrdering {
-    Current,
-    Future,
-    Past,
-}
-
-#[derive(Debug)]
-struct PartitionBoundary {
-    min_timestamp: i64,
-    max_timestamp: i64, // exclusive
-}
-
-impl PartitionBoundary {
-    fn contains_range(&self, start: i64, end: i64) -> bool {
-        !(start >= self.max_timestamp || end < self.min_timestamp)
-    }
-
-    fn contains_point(&self, timestamp: i64) -> bool {
-        timestamp >= self.min_timestamp && timestamp < self.max_timestamp
-    }
-
-    fn ordering(&self, timestamp: i64) -> PointPartitionOrdering {
-        if timestamp < self.min_timestamp {
-            return PointPartitionOrdering::Past;
-        }
-
-        if timestamp >= self.max_timestamp {
-            return PointPartitionOrdering::Future;
-        }
-
-        return PointPartitionOrdering::Current;
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
-    use crate::metric::{DataPoint, Row};
+    use crate::{
+        metric::{DataPoint, Row},
+        partition::{memory::Partition, Boundary},
+    };
 
-    use super::{MemoryPartition, PartitionBoundary};
+    use super::MemoryPartition;
 
     fn create_partition_with_rows(
         partition_duration: Option<i64>,
@@ -217,7 +198,7 @@ pub mod tests {
 
     #[test]
     fn test_partition_boundary() {
-        let boundaries = PartitionBoundary {
+        let boundaries = Boundary {
             min_timestamp: 1000,
             max_timestamp: 2000,
         };
@@ -251,7 +232,7 @@ pub mod tests {
         };
         let row = Row { metric, data_point };
         let partition = MemoryPartition::new(None, &row);
-        let result = partition.select(metric, 1000, 2000);
+        let result = partition.select(metric, 1000, 2000).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(data_point, result[0]);
     }
@@ -281,11 +262,11 @@ pub mod tests {
         let partition = MemoryPartition::new(None, row_a);
         partition.insert(row_b);
 
-        let result = partition.select(metric_a, 1000, 2000);
+        let result = partition.select(metric_a, 1000, 2000).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(data_point_a, result[0]);
 
-        let result = partition.select(metric_b, 1000, 2000);
+        let result = partition.select(metric_b, 1000, 2000).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(data_point_b, result[0]);
     }
@@ -301,7 +282,7 @@ pub mod tests {
             },
         };
         let partition = MemoryPartition::new(None, &row);
-        let result = partition.select(metric, 0, 1000);
+        let result = partition.select(metric, 0, 1000).unwrap();
         assert_eq!(result.len(), 0);
     }
 
@@ -352,7 +333,7 @@ pub mod tests {
 
         let partition = create_partition_with_rows(None, &rows);
 
-        let result = partition.select(metric, 200, 400);
+        let result = partition.select(metric, 200, 400).unwrap();
         assert_eq!(result, data_points[1..7]);
     }
 
@@ -388,7 +369,7 @@ pub mod tests {
 
         let partition = create_partition_with_rows(None, &rows);
 
-        let result = partition.select(metric, 101, 300);
+        let result = partition.select(metric, 101, 300).unwrap();
         assert_eq!(result, data_points[1..]);
     }
 
@@ -420,7 +401,7 @@ pub mod tests {
 
         let partition = create_partition_with_rows(None, &rows);
 
-        let result = partition.select(metric, 0, 1000);
+        let result = partition.select(metric, 0, 1000).unwrap();
         assert_eq!(result, vec![data_points[0], data_points[2]]);
     }
 
@@ -457,7 +438,7 @@ pub mod tests {
         let partition = create_partition_with_rows(None, &rows);
         data_points.sort_by_key(|d| d.timestamp);
 
-        let result = partition.select(metric, 0, 1000);
+        let result = partition.select(metric, 0, 1000).unwrap();
         assert_eq!(result, data_points);
     }
 }

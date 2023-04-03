@@ -13,17 +13,16 @@ use thiserror::Error;
 use crate::{
     encode::encode::{get_decoder, get_encoder, Decoder, EncodeStrategy, Encoder},
     metric::DataPoint,
+    Row,
 };
 
-use super::memory::MemoryPartition;
+use super::{memory::MemoryPartition, Boundary, Partition};
 
 pub const DATA_FILE_NAME: &str = "data";
 pub const META_FILE_NAME: &str = "meta.json";
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("empty directory path")]
-    EmptyDirPathError,
     #[error("error opening file")]
     FileError(#[from] io::Error),
     #[error("not data points in data file")]
@@ -59,8 +58,8 @@ pub struct DiskPartition {
     mapped_file: Mmap,
 }
 
-impl DiskPartition {
-    pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
+impl Partition for DiskPartition {
+    fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
         let meta = self
             .metadata
             .metrics
@@ -85,13 +84,29 @@ impl DiskPartition {
         }
         Ok(points)
     }
-}
 
-pub fn open(dir_path: &str) -> Result<DiskPartition, Error> {
-    if dir_path.is_empty() {
-        return Err(Error::EmptyDirPathError);
+    fn insert(&self, _: &Row) {
+        // TODO: support is_writable or error out here
+        // instead of silently dropping rows
     }
 
+    fn ordering(&self, row: &Row) -> super::PointPartitionOrdering {
+        self.boundary().ordering(row.data_point.timestamp)
+    }
+
+    fn flush(&self, _dir_path: &Path, _encode_strategy: EncodeStrategy) -> Result<()> {
+        Ok(())
+    }
+
+    fn boundary(&self) -> Boundary {
+        Boundary {
+            min_timestamp: self.metadata.min_timestamp,
+            max_timestamp: self.metadata.max_timestamp,
+        }
+    }
+}
+
+pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
     let meta_file_path = Path::new(dir_path).join(META_FILE_NAME);
     let meta_file = File::open(meta_file_path)?;
     let meta: PartitionMetadata = serde_json::from_reader(BufReader::new(meta_file))?;
@@ -116,14 +131,9 @@ pub fn open(dir_path: &str) -> Result<DiskPartition, Error> {
 
 pub fn flush(
     partition: &MemoryPartition,
-    data_path: &str,
+    dir_path: &Path,
     encode_strategy: EncodeStrategy,
 ) -> Result<()> {
-    let dir_path = Path::new(&data_path).join(format!(
-        "p-{}-{}",
-        partition.min_timestamp(),
-        partition.max_timestamp()
-    ));
     fs::create_dir_all(dir_path.clone())?;
 
     let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
@@ -183,6 +193,7 @@ pub mod tests {
         partition::{
             disk::{flush, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
             memory::MemoryPartition,
+            Partition,
         },
     };
 
@@ -190,7 +201,8 @@ pub mod tests {
 
     #[test]
     fn test_open() {
-        let partition = open("tests/fixtures/test_csv_disk_partition").unwrap();
+        let dir_path = Path::new("tests/fixtures/test_csv_disk_partition");
+        let partition = open(dir_path).unwrap();
         assert_eq!(partition.metadata.num_data_points, 6);
         assert_eq!(partition.metadata.min_timestamp, 10);
         assert_eq!(partition.metadata.max_timestamp, 110);
@@ -198,7 +210,8 @@ pub mod tests {
 
     #[test]
     fn test_select() {
-        let partition = open("tests/fixtures/test_csv_disk_partition").unwrap();
+        let dir_path = Path::new("tests/fixtures/test_csv_disk_partition");
+        let partition = open(dir_path).unwrap();
         assert_eq!(
             partition.select("hello", 11, 100).unwrap(),
             vec![
@@ -236,21 +249,22 @@ pub mod tests {
             data_point: d,
         });
         let partition = MemoryPartition::new(Some(100), &rows[0]);
-        for (_, remaining) in rows.split_first() {
+        if let Some((_, remaining)) = rows.split_first() {
             for row in remaining {
                 partition.insert(row);
             }
         }
 
-        let data_path = String::from("./test_flush_data");
-        flush(&partition, &data_path, EncodeStrategy::CSV).unwrap();
-
+        let binding = String::from("./test_flush_data");
+        let data_path = Path::new(&binding);
         // p-10-110 because first timestamp is 10 and partition duration is 100.
-        let dir_name = Path::new(&data_path).join("p-10-110");
-        let data = fs::read_to_string(dir_name.join(DATA_FILE_NAME)).unwrap();
+        let dir_path = data_path.join("p-10-110");
+        flush(&partition, &dir_path, EncodeStrategy::CSV).unwrap();
+
+        let data = fs::read_to_string(dir_path.join(DATA_FILE_NAME)).unwrap();
         assert_eq!(data, String::from("10,0\n15,0.052\n20,1\n"));
 
-        let meta = fs::read_to_string(dir_name.join(META_FILE_NAME)).unwrap();
+        let meta = fs::read_to_string(dir_path.join(META_FILE_NAME)).unwrap();
         let meta_obj: PartitionMetadata = serde_json::from_str(&meta).unwrap();
         assert_eq!(meta_obj.min_timestamp, 10);
         assert_eq!(meta_obj.max_timestamp, 110);

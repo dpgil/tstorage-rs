@@ -1,12 +1,15 @@
+use std::path::Path;
+
 use crate::{
     encode::encode::EncodeStrategy,
     metric::{DataPoint, Row},
-    partition::memory::{MemoryPartition, PointPartitionOrdering},
+    partition::{disk::open, memory::MemoryPartition, Partition, PointPartitionOrdering},
     window::InsertWindow,
 };
+use anyhow::Result;
 
 pub struct Storage {
-    partitions: Vec<MemoryPartition>,
+    partitions: Vec<Box<dyn Partition>>,
     config: Config,
     insert_window: InsertWindow,
 }
@@ -27,9 +30,9 @@ pub struct Config {
     pub data_path: String,
     // Type of encoder for data point encoding.
     pub encode_strategy: EncodeStrategy,
+    // Number of partitions to keep writeable, remainder will be read-only.
+    pub num_writeable_partitions: usize,
 }
-
-const NUM_WRITEABLE_PARTITIONS: i64 = 2;
 
 impl Storage {
     pub fn new(config: Config) -> Self {
@@ -40,12 +43,12 @@ impl Storage {
         }
     }
 
-    pub fn select(&self, name: &str, start: i64, end: i64) -> Vec<DataPoint> {
+    pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
         let mut result = vec![];
         for partition in &self.partitions {
-            result.append(&mut partition.select(name, start, end));
+            result.append(&mut partition.select(name, start, end)?);
         }
-        result
+        Ok(result)
     }
 
     pub fn insert(&mut self, rows: &[Row]) {
@@ -60,10 +63,51 @@ impl Storage {
     }
 
     fn create_partition_with_row(&mut self, row: &Row) {
-        self.partitions.push(MemoryPartition::new(
+        self.partitions.push(Box::new(MemoryPartition::new(
             Some(self.config.partition_duration),
             row,
-        ))
+        )));
+
+        // TODO: do this asynchronously
+        self.flush_partitions();
+    }
+
+    fn flush_partitions(&mut self) {
+        self.partitions
+            .iter_mut()
+            .rev()
+            .enumerate()
+            .for_each(|(i, p)| {
+                if i < self.config.num_writeable_partitions {
+                    return;
+                }
+
+                // Flush partition and convert it to disk partition.
+                // TODO: make sure we're not re-flushing disk partitions here.
+                let boundary = p.boundary();
+                // TODO:minor: extract logic to generate partition dir path.
+                let dir_path = Path::new(&self.config.data_path).join(format!(
+                    "p-{}-{}",
+                    boundary.min_timestamp(),
+                    boundary.max_timestamp()
+                ));
+                if let Err(e) = p.flush(&dir_path, self.config.encode_strategy) {
+                    // TODO: handle flush error
+                    println!("error flushing partition {:?}", e);
+                    return;
+                }
+                match open(&dir_path) {
+                    Ok(disk_partition) => {
+                        // Swap the partition with a disk partition.
+                        *p = Box::new(disk_partition);
+                    }
+                    Err(e) => {
+                        // TODO: handle open error
+                        println!("error opening partition {:?}", e);
+                        return;
+                    }
+                }
+            });
     }
 
     fn cascade_past_insert(&self, row: &Row) {
@@ -71,7 +115,7 @@ impl Storage {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
                 let mut i = 1;
-                while i < NUM_WRITEABLE_PARTITIONS {
+                while i < self.config.num_writeable_partitions {
                     i += 1;
 
                     match iter.next() {
@@ -116,6 +160,7 @@ pub mod tests {
     fn test_storage_insert_multiple_partitions() {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
+            num_writeable_partitions: 3,
             ..Default::default()
         });
 
@@ -156,11 +201,11 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }])
+            storage.insert(&[Row { metric, data_point }]);
         }
         assert_eq!(storage.partitions.len(), 3);
 
-        let result = storage.select(&metric.to_string(), 0, 7);
+        let result = storage.select(&metric.to_string(), 0, 7).unwrap();
         assert_eq!(result, data_points);
     }
 
@@ -169,6 +214,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
+            num_writeable_partitions: 2,
             ..Default::default()
         });
 
@@ -193,10 +239,10 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }])
+            storage.insert(&[Row { metric, data_point }]);
         }
 
-        let result = storage.select(&metric.to_string(), 0, 20);
+        let result = storage.select(&metric.to_string(), 0, 20).unwrap();
         assert_eq!(result, vec![data_points[0], data_points[2], data_points[1]]);
     }
 
@@ -208,6 +254,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
+            num_writeable_partitions: 2,
             ..Default::default()
         });
 
@@ -224,10 +271,10 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }])
+            storage.insert(&[Row { metric, data_point }]);
         }
 
-        let result = storage.select(&metric.to_string(), 0, 20);
+        let result = storage.select(&metric.to_string(), 0, 20).unwrap();
         assert_eq!(result, vec![data_points[0]]);
     }
 
@@ -236,6 +283,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
             insert_window: 5,
+            num_writeable_partitions: 2,
             ..Default::default()
         });
 
@@ -260,10 +308,10 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }])
+            storage.insert(&[Row { metric, data_point }]);
         }
 
-        let result = storage.select(&metric.to_string(), 0, 20);
+        let result = storage.select(&metric.to_string(), 0, 20).unwrap();
 
         let mut expected = data_points.clone();
         expected.sort_by_key(|d| d.timestamp);

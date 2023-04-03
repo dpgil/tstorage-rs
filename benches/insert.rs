@@ -15,6 +15,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 insert_window: 100,
                 data_path: data_path.clone(),
                 encode_strategy: EncodeStrategy::CSV,
+                num_writeable_partitions: 2,
             });
             let num_metrics = 100_000;
             let metric = "hello";
@@ -42,6 +43,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             insert_window: 100,
             data_path: data_path.clone(),
             encode_strategy: EncodeStrategy::CSV,
+            num_writeable_partitions: 2,
         });
         let num_metrics = 10_000;
         let metric = "hello";

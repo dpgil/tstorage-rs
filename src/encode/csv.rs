@@ -77,12 +77,6 @@ struct FakeFile {
     pos: u64,
 }
 
-impl FakeFile {
-    fn new(buf: Vec<u8>) -> Self {
-        Self { buf, pos: 0 }
-    }
-}
-
 impl Seek for FakeFile {
     fn seek(&mut self, seek_from: std::io::SeekFrom) -> Result<u64> {
         match seek_from {
@@ -133,6 +127,12 @@ pub mod tests {
     };
 
     use super::{CsvDecoder, CsvEncoder, FakeFile};
+
+    impl FakeFile {
+        fn new(buf: Vec<u8>) -> Self {
+            Self { buf, pos: 0 }
+        }
+    }
 
     #[test]
     fn test_encode() {
