@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::{DataPoint, Row, EncodeStrategy};
 use anyhow::Result;
+use serde::{Serialize, Deserialize};
 
 pub mod disk;
 pub mod memory;
@@ -23,7 +24,7 @@ pub enum PointPartitionOrdering {
     Past,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Boundary {
     min_timestamp: i64,
     max_timestamp: i64, // exclusive

@@ -36,15 +36,13 @@ pub struct MetricMetadata {
     pub name: String,
     pub start_offset: usize,
     pub end_offset: usize,
-    pub min_timestamp: i64,
-    pub max_timestamp: i64,
+    pub boundary: Boundary,
     pub num_data_points: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PartitionMetadata {
-    pub min_timestamp: i64,
-    pub max_timestamp: i64,
+    pub boundary: Boundary,
     pub num_data_points: usize,
     pub metrics: HashMap<String, MetricMetadata>,
     pub created_at: i64, // TODO:minor: time.Time
@@ -99,10 +97,7 @@ impl Partition for DiskPartition {
     }
 
     fn boundary(&self) -> Boundary {
-        Boundary {
-            min_timestamp: self.metadata.min_timestamp,
-            max_timestamp: self.metadata.max_timestamp,
-        }
+        self.metadata.boundary
     }
 }
 
@@ -160,8 +155,10 @@ pub fn flush(
                 name: name.clone(),
                 start_offset: start_offset.try_into().unwrap(),
                 end_offset: end_offset.try_into().unwrap(),
-                min_timestamp: metric_entry.min_timestamp(),
-                max_timestamp: metric_entry.max_timestamp(),
+                boundary: Boundary {
+                    min_timestamp: metric_entry.min_timestamp(),
+                    max_timestamp: metric_entry.max_timestamp(),
+                },
                 num_data_points,
             },
         );
@@ -169,8 +166,10 @@ pub fn flush(
     encoder.flush()?;
 
     let partition_metadata = PartitionMetadata {
-        min_timestamp,
-        max_timestamp,
+        boundary: Boundary {
+            min_timestamp,
+            max_timestamp,
+        },
         num_data_points: total_data_points,
         metrics,
         created_at: 444, // TODO: Support created_at time
@@ -205,8 +204,8 @@ pub mod tests {
         let dir_path = Path::new("tests/fixtures/test_csv_disk_partition");
         let partition = open(dir_path).unwrap();
         assert_eq!(partition.metadata.num_data_points, 6);
-        assert_eq!(partition.metadata.min_timestamp, 10);
-        assert_eq!(partition.metadata.max_timestamp, 110);
+        assert_eq!(partition.metadata.boundary.min_timestamp, 10);
+        assert_eq!(partition.metadata.boundary.max_timestamp, 110);
     }
 
     #[test]
@@ -265,8 +264,8 @@ pub mod tests {
 
         let meta = fs::read_to_string(dir_path.join(META_FILE_NAME)).unwrap();
         let meta_obj: PartitionMetadata = serde_json::from_str(&meta).unwrap();
-        assert_eq!(meta_obj.min_timestamp, 10);
-        assert_eq!(meta_obj.max_timestamp, 110);
+        assert_eq!(meta_obj.boundary.min_timestamp, 10);
+        assert_eq!(meta_obj.boundary.max_timestamp, 110);
         assert_eq!(meta_obj.num_data_points, 3);
 
         fs::remove_dir_all(data_path).unwrap();
