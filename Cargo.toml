@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.66"
+chrono = { version = "0.4.24", features = ["serde"] }
 criterion = "0.4.0"
 dashmap = "5.4.0"
 memmap = "0.7.0"

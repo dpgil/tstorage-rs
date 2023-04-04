@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::{serde::ts_seconds, DateTime, Utc};
 use memmap::Mmap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -45,7 +46,8 @@ pub struct PartitionMetadata {
     pub boundary: Boundary,
     pub num_data_points: usize,
     pub metrics: HashMap<String, MetricMetadata>,
-    pub created_at: i64, // TODO:minor: time.Time
+    #[serde(with = "ts_seconds")]
+    pub created_at: DateTime<Utc>,
     pub encode_strategy: EncodeStrategy,
 }
 
@@ -172,7 +174,7 @@ pub fn flush(
         },
         num_data_points: total_data_points,
         metrics,
-        created_at: 444, // TODO: Support created_at time
+        created_at: Utc::now(),
         encode_strategy,
     };
     let meta_string = serde_json::to_string(&partition_metadata)?;
