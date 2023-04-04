@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     encode::encode::EncodeStrategy,
     metric::{DataPoint, Row},
-    partition::{disk::open, memory::MemoryPartition, Partition, PointPartitionOrdering},
+    partition::{disk::open, memory::MemoryPartition, Partition, PointPartitionOrdering, Boundary},
     window::InsertWindow,
 };
 use anyhow::Result;
@@ -84,13 +84,7 @@ impl Storage {
 
                 // Flush partition and convert it to disk partition.
                 // TODO: make sure we're not re-flushing disk partitions here.
-                let boundary = p.boundary();
-                // TODO:minor: extract logic to generate partition dir path.
-                let dir_path = Path::new(&self.config.data_path).join(format!(
-                    "p-{}-{}",
-                    boundary.min_timestamp(),
-                    boundary.max_timestamp()
-                ));
+                let dir_path = get_dir_path(&self.config.data_path, p.boundary());
                 if let Err(e) = p.flush(&dir_path, self.config.encode_strategy) {
                     // TODO: handle flush error
                     println!("error flushing partition {:?}", e);
@@ -150,8 +144,18 @@ impl Storage {
     }
 }
 
+pub fn get_dir_path(data_path: &str, boundary: Boundary) -> PathBuf {
+    Path::new(data_path).join(format!(
+        "p-{}-{}",
+        boundary.min_timestamp(),
+        boundary.max_timestamp()
+    ))
+}
+
 #[cfg(test)]
 pub mod tests {
+    use std::fs;
+
     use crate::metric::{DataPoint, Row};
 
     use super::{Config, Storage};
@@ -317,5 +321,56 @@ pub mod tests {
         expected.sort_by_key(|d| d.timestamp);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_storage_memory_and_disk_partitions() {
+        let data_path = String::from("./test_storage_memory_and_disk_partitions");
+        let mut storage = Storage::new(Config {
+            partition_duration: 10,
+            insert_window: 20,
+            num_writeable_partitions: 2,
+            data_path: data_path.clone(),
+            ..Default::default()
+        });
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 0,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 5,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 10, // start of 2nd partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 12,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 20, // start of 3rd partition, 1st partition should now be flushed
+                value: 2.0,
+            },
+            DataPoint {
+                timestamp: 30, // start of 4th partition, 2nd partition should now be flushed
+                value: 3.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&[Row { metric, data_point }]);
+        }
+
+        let result = storage.select(&metric.to_string(), 0, 40).unwrap();
+
+        let expected = data_points.clone();
+        assert_eq!(result, expected);
+
+        fs::remove_dir_all(data_path).unwrap();
     }
 }

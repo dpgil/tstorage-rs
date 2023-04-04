@@ -195,6 +195,7 @@ pub mod tests {
             memory::MemoryPartition,
             Partition,
         },
+        storage::get_dir_path,
     };
 
     use super::open;
@@ -255,10 +256,8 @@ pub mod tests {
             }
         }
 
-        let binding = String::from("./test_flush_data");
-        let data_path = Path::new(&binding);
-        // p-10-110 because first timestamp is 10 and partition duration is 100.
-        let dir_path = data_path.join("p-10-110");
+        let data_path = "./test_flush_data";
+        let dir_path = get_dir_path(data_path, partition.boundary());
         flush(&partition, &dir_path, EncodeStrategy::CSV).unwrap();
 
         let data = fs::read_to_string(dir_path.join(DATA_FILE_NAME)).unwrap();
