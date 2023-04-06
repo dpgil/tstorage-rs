@@ -1,14 +1,13 @@
+use anyhow::Result;
+use chrono::{serde::ts_seconds, DateTime, Utc};
+use memmap::Mmap;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::{self, BufReader, Write},
     path::Path,
 };
-
-use anyhow::Result;
-use chrono::{serde::ts_seconds, DateTime, Utc};
-use memmap::Mmap;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -17,7 +16,7 @@ use crate::{
     Row,
 };
 
-use super::{memory::MemoryPartition, Boundary, Partition};
+use super::{memory::MemoryPartition, Boundary, Partition, PartitionError};
 
 pub const DATA_FILE_NAME: &str = "data";
 pub const META_FILE_NAME: &str = "meta.json";
@@ -85,9 +84,8 @@ impl Partition for DiskPartition {
         Ok(points)
     }
 
-    fn insert(&self, _: &Row) {
-        // TODO: support is_writable or error out here
-        // instead of silently dropping rows
+    fn insert(&self, _: &Row) -> Result<(), PartitionError> {
+        Err(PartitionError::Unwritable)
     }
 
     fn ordering(&self, row: &Row) -> super::PointPartitionOrdering {
@@ -130,7 +128,7 @@ pub fn flush(
     partition: &MemoryPartition,
     dir_path: &Path,
     encode_strategy: EncodeStrategy,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     fs::create_dir_all(dir_path.clone())?;
 
     let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);

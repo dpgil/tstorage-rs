@@ -1,18 +1,26 @@
-use std::path::Path;
-
-use crate::{DataPoint, Row, EncodeStrategy};
+use crate::{DataPoint, EncodeStrategy, Row};
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use thiserror::Error;
 
 pub mod disk;
 pub mod memory;
 
 pub trait Partition {
     fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>>;
-    fn insert(&self, row: &Row);
+    fn insert(&self, row: &Row) -> Result<(), PartitionError>;
     fn ordering(&self, row: &Row) -> PointPartitionOrdering;
     fn flush(&self, dir_path: &Path, encode_strategy: EncodeStrategy) -> Result<()>;
     fn boundary(&self) -> Boundary;
+}
+
+#[derive(Error, Debug)]
+pub enum PartitionError {
+    #[error("data point inserted outside of partition boundary")]
+    OutOfBounds,
+    #[error("data points inserted into unwritable partition")]
+    Unwritable,
 }
 
 // Terrible naming, but this represents whether a point belongs in

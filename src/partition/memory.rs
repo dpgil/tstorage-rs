@@ -1,9 +1,8 @@
-use std::path::Path;
-
 use crate::metric::{DataPoint, Row};
 use anyhow::Result;
+use std::path::Path;
 
-use super::{Partition, Boundary, PointPartitionOrdering, disk::flush};
+use super::{disk::flush, Boundary, Partition, PartitionError, PointPartitionOrdering};
 
 #[derive(Debug)]
 pub struct MemoryPartition {
@@ -22,21 +21,23 @@ impl Partition for MemoryPartition {
         })
     }
 
-    fn insert(&self, row: &Row) {
-        if self
+    fn insert(&self, row: &Row) -> Result<(), PartitionError> {
+        if !self
             .partition_boundary
             .contains_point(row.data_point.timestamp)
         {
-            match self.map.get_mut(row.metric) {
-                Some(mut m) => {
-                    m.insert(row.data_point);
-                }
-                None => {
-                    self.map
-                        .insert(row.metric.to_string(), MetricEntry::new(row.data_point));
-                }
-            };
+            return Err(PartitionError::OutOfBounds);
         }
+        match self.map.get_mut(row.metric) {
+            Some(mut m) => {
+                m.insert(row.data_point);
+            }
+            None => {
+                self.map
+                    .insert(row.metric.to_string(), MetricEntry::new(row.data_point));
+            }
+        };
+        Ok(())
     }
 
     fn ordering(&self, row: &Row) -> PointPartitionOrdering {

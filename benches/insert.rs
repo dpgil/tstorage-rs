@@ -21,13 +21,15 @@ fn criterion_benchmark(c: &mut Criterion) {
             let num_metrics = 100_000;
             let metric = "hello";
             for i in 0..num_metrics {
-                storage.insert(&[Row {
-                    metric,
-                    data_point: DataPoint {
-                        timestamp: i,
-                        value: 123.0,
-                    },
-                }])
+                storage
+                    .insert(&Row {
+                        metric,
+                        data_point: DataPoint {
+                            timestamp: i,
+                            value: 123.0,
+                        },
+                    })
+                    .unwrap()
             }
             #[allow(unused_must_use)]
             {
@@ -50,13 +52,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         let num_metrics = 10_000;
         let metric = "hello";
         for i in 0..num_metrics {
-            black_box(storage.insert(&[Row {
-                metric,
-                data_point: DataPoint {
-                    timestamp: i,
-                    value: 123.0,
-                },
-            }]))
+            black_box(
+                storage
+                    .insert(&Row {
+                        metric,
+                        data_point: DataPoint {
+                            timestamp: i,
+                            value: 123.0,
+                        },
+                    })
+                    .unwrap(),
+            )
         }
 
         let num_selects = 1000;

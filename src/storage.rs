@@ -1,6 +1,9 @@
 use crate::{
     metric::{DataPoint, Row},
-    partition::{disk::open, memory::MemoryPartition, Boundary, Partition, PointPartitionOrdering},
+    partition::{
+        disk::open, memory::MemoryPartition, Boundary, Partition, PartitionError,
+        PointPartitionOrdering,
+    },
     window::InsertWindow,
     EncodeStrategy,
 };
@@ -64,7 +67,13 @@ pub struct Storage {
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("error validating config")]
-    ConfigError(#[from] ConfigError),
+    InvalidConfig(#[from] ConfigError),
+    #[error("data point inserted outside of storage insert window")]
+    OutOfBounds,
+    #[error("error inserting data point into partition")]
+    FailedInsert(#[from] PartitionError),
+    #[error("can't find appropriate partition for data point")]
+    PartitionNotFound,
 }
 
 impl Storage {
@@ -86,14 +95,13 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn insert(&mut self, rows: &[Row]) {
-        for row in rows {
-            if self.insert_window.contains(row.data_point.timestamp) {
-                self.insert_row(row);
-                self.insert_window.update(row.data_point.timestamp);
-            }
-            // TODO:minor: explicitly reject points outside of insert window.
+    pub fn insert(&mut self, row: &Row) -> Result<(), StorageError> {
+        if !self.insert_window.contains(row.data_point.timestamp) {
+            return Err(StorageError::OutOfBounds);
         }
+        self.insert_row(row)?;
+        self.insert_window.update(row.data_point.timestamp);
+        Ok(())
     }
 
     fn create_partition_with_row(&mut self, row: &Row) {
@@ -138,7 +146,7 @@ impl Storage {
             });
     }
 
-    fn cascade_past_insert(&self, row: &Row) {
+    fn cascade_past_insert(&self, row: &Row) -> Result<(), StorageError> {
         match self.partitions.split_last() {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
@@ -149,32 +157,36 @@ impl Storage {
                     match iter.next() {
                         Some(p) => match p.ordering(row) {
                             PointPartitionOrdering::Current => {
-                                p.insert(row);
-                                return;
+                                return p.insert(row).map_err(StorageError::FailedInsert);
                             }
-                            PointPartitionOrdering::Future => return,
+                            PointPartitionOrdering::Future => {
+                                return Err(StorageError::PartitionNotFound);
+                            }
                             PointPartitionOrdering::Past => continue,
                         },
-                        None => return,
+                        None => return Err(StorageError::OutOfBounds),
                     }
                 }
                 // Unwritable point. This means insert_window > num_writable_partitions * partition_duration,
                 // in other words, we're accepting points that later cannot be written. This is validated
                 // in the config during Storage construction so it's unexpected.
                 error!("partition not found for data point {:?}", row);
+                return Err(StorageError::PartitionNotFound);
             }
-            None => return,
+            None => return Err(StorageError::OutOfBounds),
         }
     }
 
-    fn insert_row(&mut self, row: &Row) {
+    fn insert_row(&mut self, row: &Row) -> Result<(), StorageError> {
         match self.partitions.last() {
             Some(p) => match p.ordering(row) {
-                PointPartitionOrdering::Current => p.insert(row),
-                PointPartitionOrdering::Future => self.create_partition_with_row(row),
+                PointPartitionOrdering::Current => {
+                    p.insert(row).map_err(StorageError::FailedInsert)
+                }
+                PointPartitionOrdering::Future => Ok(self.create_partition_with_row(row)),
                 PointPartitionOrdering::Past => self.cascade_past_insert(row),
             },
-            None => self.create_partition_with_row(row),
+            None => Ok(self.create_partition_with_row(row)),
         }
     }
 }
@@ -241,7 +253,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }]);
+            storage.insert(&Row { metric, data_point }).unwrap();
         }
         assert_eq!(storage.partitions.len(), 3);
 
@@ -280,7 +292,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }]);
+            storage.insert(&Row { metric, data_point }).unwrap();
         }
 
         let result = storage.select(&metric.to_string(), 0, 20).unwrap();
@@ -313,7 +325,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }]);
+            storage.insert(&Row { metric, data_point }).unwrap();
         }
 
         let result = storage.select(&metric.to_string(), 0, 20).unwrap();
@@ -351,7 +363,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }]);
+            storage.insert(&Row { metric, data_point }).unwrap();
         }
 
         let result = storage.select(&metric.to_string(), 0, 20).unwrap();
@@ -403,7 +415,7 @@ pub mod tests {
         ];
 
         for data_point in data_points {
-            storage.insert(&[Row { metric, data_point }]);
+            storage.insert(&Row { metric, data_point }).unwrap();
         }
 
         let result = storage.select(&metric.to_string(), 0, 40).unwrap();
