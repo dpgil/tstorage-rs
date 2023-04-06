@@ -1,23 +1,20 @@
-use std::path::{Path, PathBuf};
-
 use crate::{
-    encode::encode::EncodeStrategy,
     metric::{DataPoint, Row},
-    partition::{disk::open, memory::MemoryPartition, Partition, PointPartitionOrdering, Boundary},
+    partition::{disk::open, memory::MemoryPartition, Boundary, Partition, PointPartitionOrdering},
     window::InsertWindow,
+    EncodeStrategy,
 };
 use anyhow::Result;
-
-pub struct Storage {
-    partitions: Vec<Box<dyn Partition>>,
-    config: Config,
-    insert_window: InsertWindow,
-}
+use log::error;
+use std::{
+    num::TryFromIntError,
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 
 #[derive(Default)]
 pub struct Config {
-    // The size of partitions that store data points.
-    // TODO:minor: use Duration.
+    // The size of partitions that store data points, in seconds.
     pub partition_duration: i64,
     // Tolerance for inserting out-of-order data points.
     // Given the last data point inserted with timestamp t,
@@ -30,17 +27,55 @@ pub struct Config {
     pub data_path: String,
     // Type of encoder for data point encoding.
     pub encode_strategy: EncodeStrategy,
-    // Number of partitions to keep writeable, remainder will be read-only.
-    pub num_writeable_partitions: usize,
+    // Number of partitions to keep writable, remainder will be read-only.
+    pub num_writable_partitions: usize,
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("insert window is larger than writable window")]
+    InsertWindowError,
+    #[error("error converting writable partitions to i64")]
+    WritablePartitionError(#[from] TryFromIntError),
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let num_writable_partitions_result: Result<i64, TryFromIntError> =
+            self.num_writable_partitions.try_into();
+        match num_writable_partitions_result {
+            Ok(num_writable_partitions) => {
+                if self.insert_window > (num_writable_partitions * self.partition_duration) {
+                    return Err(ConfigError::InsertWindowError);
+                }
+                return Ok(());
+            }
+            Err(e) => Err(ConfigError::WritablePartitionError(e)),
+        }
+    }
+}
+
+pub struct Storage {
+    partitions: Vec<Box<dyn Partition>>,
+    config: Config,
+    insert_window: InsertWindow,
+}
+
+#[derive(Error, Debug)]
+pub enum StorageError {
+    #[error("error validating config")]
+    ConfigError(#[from] ConfigError),
 }
 
 impl Storage {
-    pub fn new(config: Config) -> Self {
-        Self {
+    pub fn new(config: Config) -> Result<Self, StorageError> {
+        config.validate()?;
+
+        Ok(Self {
             partitions: vec![],
             insert_window: InsertWindow::new(config.insert_window),
             config,
-        }
+        })
     }
 
     pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
@@ -52,7 +87,6 @@ impl Storage {
     }
 
     pub fn insert(&mut self, rows: &[Row]) {
-        // TODO:minor: should we assume rows are sorted?
         for row in rows {
             if self.insert_window.contains(row.data_point.timestamp) {
                 self.insert_row(row);
@@ -78,7 +112,7 @@ impl Storage {
             .rev()
             .enumerate()
             .for_each(|(i, p)| {
-                if i < self.config.num_writeable_partitions {
+                if i < self.config.num_writable_partitions {
                     return;
                 }
 
@@ -109,7 +143,7 @@ impl Storage {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
                 let mut i = 1;
-                while i < self.config.num_writeable_partitions {
+                while i < self.config.num_writable_partitions {
                     i += 1;
 
                     match iter.next() {
@@ -124,9 +158,10 @@ impl Storage {
                         None => return,
                     }
                 }
-                // TODO:minor: non-writeable point. This means
-                // insert_window > num_writeable_partitions * partition_duration, in other words,
-                // we're accepting points that later cannot be written. We can validate this in the config.
+                // Unwritable point. This means insert_window > num_writable_partitions * partition_duration,
+                // in other words, we're accepting points that later cannot be written. This is validated
+                // in the config during Storage construction so it's unexpected.
+                error!("partition not found for data point {:?}", row);
             }
             None => return,
         }
@@ -164,9 +199,10 @@ pub mod tests {
     fn test_storage_insert_multiple_partitions() {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
-            num_writeable_partitions: 3,
+            num_writable_partitions: 3,
             ..Default::default()
-        });
+        })
+        .unwrap();
 
         let metric = "hello";
         let data_points = [
@@ -218,9 +254,10 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
-            num_writeable_partitions: 2,
+            num_writable_partitions: 2,
             ..Default::default()
-        });
+        })
+        .unwrap();
 
         let metric = "hello";
         let data_points = [
@@ -258,9 +295,10 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
-            num_writeable_partitions: 2,
+            num_writable_partitions: 2,
             ..Default::default()
-        });
+        })
+        .unwrap();
 
         let metric = "hello";
         let data_points = [
@@ -286,10 +324,11 @@ pub mod tests {
     fn test_storage_insert_window_across_partitions() {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
-            insert_window: 5,
-            num_writeable_partitions: 2,
+            insert_window: 2,
+            num_writable_partitions: 2,
             ..Default::default()
-        });
+        })
+        .unwrap();
 
         let metric = "hello";
         let data_points = [
@@ -329,10 +368,11 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 10,
             insert_window: 20,
-            num_writeable_partitions: 2,
+            num_writable_partitions: 2,
             data_path: data_path.clone(),
             ..Default::default()
-        });
+        })
+        .unwrap();
 
         let metric = "hello";
         let data_points = [
@@ -372,5 +412,17 @@ pub mod tests {
         assert_eq!(result, expected);
 
         fs::remove_dir_all(data_path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_invalid_config() {
+        let storage = Storage::new(Config {
+            partition_duration: 10,
+            insert_window: 100,
+            num_writable_partitions: 2,
+            data_path: String::from(""),
+            ..Default::default()
+        });
+        assert!(storage.is_err());
     }
 }

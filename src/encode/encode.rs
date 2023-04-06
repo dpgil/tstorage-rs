@@ -21,9 +21,9 @@ pub trait Decoder {
     fn decode_point(&mut self) -> Result<DataPoint>;
 }
 
-pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writeable: W) -> impl Encoder {
+pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writable: W) -> impl Encoder {
     match encode_strategy {
-        EncodeStrategy::CSV => CsvEncoder::new(writeable),
+        EncodeStrategy::CSV => CsvEncoder::new(writable),
     }
 }
 

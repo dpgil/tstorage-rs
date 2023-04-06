@@ -39,4 +39,4 @@ I may not want to allow a data point with timestamp=1 to be inserted for metricA
 
 ### Point far into the future
 
-If rstorage receives an anomalous data point far into the future, it'll create a new partition for it, and will make the old partitions unwriteable, depending on the number of writeable partitions. Ideally th system would provide an option to reject data points more than some time in the future, just like there's an insert window for old data points.
+If rstorage receives an anomalous data point far into the future, it'll create a new partition for it, and will make the old partitions unwritable, depending on the number of writable partitions. Ideally th system would provide an option to reject data points more than some time in the future, just like there's an insert window for old data points.

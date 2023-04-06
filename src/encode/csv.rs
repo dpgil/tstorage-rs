@@ -12,9 +12,9 @@ pub struct CsvEncoder<W: Write + Seek> {
 }
 
 impl<W: Write + Seek> CsvEncoder<W> {
-    pub fn new(writeable: W) -> Self {
+    pub fn new(writable: W) -> Self {
         Self {
-            writer: BufWriter::new(writeable),
+            writer: BufWriter::new(writable),
         }
     }
 }
