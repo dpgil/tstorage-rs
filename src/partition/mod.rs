@@ -16,7 +16,7 @@ pub trait Partition {
     fn boundary(&self) -> Boundary;
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq)]
 pub enum PartitionError {
     #[error("data point inserted outside of partition boundary")]
     OutOfBounds,
@@ -25,9 +25,9 @@ pub enum PartitionError {
     #[error("partition is unable to be flushed")]
     Unflushable,
     #[error("error flushing partition")]
-    Flush(anyhow::Error),
+    Flush,
     #[error("error opening partition")]
-    Open(anyhow::Error),
+    Open,
 }
 
 // Terrible naming, but this represents whether a point belongs in

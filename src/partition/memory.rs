@@ -49,7 +49,7 @@ impl Partition for MemoryPartition {
         dir_path: &Path,
         encode_strategy: crate::EncodeStrategy,
     ) -> Result<(), PartitionError> {
-        flush(self, dir_path, encode_strategy).map_err(PartitionError::Flush)
+        flush(self, dir_path, encode_strategy).map_err(|_| PartitionError::Flush)
     }
 
     fn boundary(&self) -> Boundary {
@@ -183,7 +183,7 @@ impl MetricEntry {
 pub mod tests {
     use crate::{
         metric::{DataPoint, Row},
-        partition::{memory::Partition, Boundary},
+        partition::{memory::Partition, Boundary, PartitionError},
     };
 
     use super::MemoryPartition;
@@ -404,7 +404,12 @@ pub mod tests {
             })
             .collect();
 
-        let partition = create_partition_with_rows(None, &rows);
+        let partition = MemoryPartition::new(None, &rows[0]);
+        assert_eq!(
+            partition.insert(&rows[1]).err(),
+            Some(PartitionError::OutOfBounds)
+        );
+        partition.insert(&rows[2]).unwrap();
 
         let result = partition.select(metric, 0, 1000).unwrap();
         assert_eq!(result, vec![data_points[0], data_points[2]]);

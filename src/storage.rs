@@ -35,7 +35,7 @@ pub struct Config {
     pub num_writable_partitions: usize,
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq)]
 pub enum ConfigError {
     #[error("insert window is larger than writable window")]
     InsertWindowError,
@@ -210,7 +210,10 @@ pub fn get_dir_path(data_path: &str, boundary: Boundary) -> PathBuf {
 pub mod tests {
     use std::fs;
 
-    use crate::metric::{DataPoint, Row};
+    use crate::{
+        metric::{DataPoint, Row},
+        storage::StorageError,
+    };
 
     use super::{Config, Storage};
 
@@ -298,8 +301,27 @@ pub mod tests {
             },
         ];
 
-        for data_point in data_points {
-            storage.insert(&Row { metric, data_point }).unwrap();
+        match data_points.split_last() {
+            Some((out_of_bounds, elements)) => {
+                for data_point in elements {
+                    storage
+                        .insert(&Row {
+                            metric,
+                            data_point: *data_point,
+                        })
+                        .unwrap();
+                }
+                assert!(matches!(
+                    storage
+                        .insert(&Row {
+                            metric,
+                            data_point: *out_of_bounds
+                        })
+                        .err(),
+                    Some(StorageError::OutOfBounds)
+                ));
+            }
+            None => unreachable!(),
         }
 
         let result = storage.select(&metric.to_string(), 0, 20).unwrap();
@@ -331,8 +353,25 @@ pub mod tests {
             },
         ];
 
-        for data_point in data_points {
-            storage.insert(&Row { metric, data_point }).unwrap();
+        match data_points.split_first() {
+            Some((in_bounds, out_of_bounds)) => {
+                storage
+                    .insert(&Row {
+                        metric,
+                        data_point: *in_bounds,
+                    })
+                    .unwrap();
+                assert!(matches!(
+                    storage
+                        .insert(&Row {
+                            metric,
+                            data_point: out_of_bounds[0]
+                        })
+                        .err(),
+                    Some(StorageError::OutOfBounds),
+                ));
+            }
+            None => unreachable!(),
         }
 
         let result = storage.select(&metric.to_string(), 0, 20).unwrap();
