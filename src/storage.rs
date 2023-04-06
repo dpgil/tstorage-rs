@@ -1,8 +1,9 @@
 use crate::{
     metric::{DataPoint, Row},
     partition::{
-        disk::open, memory::MemoryPartition, Boundary, Partition, PartitionError,
-        PointPartitionOrdering,
+        disk::{self, open},
+        memory::MemoryPartition,
+        Boundary, Partition, PartitionError, PointPartitionOrdering,
     },
     window::InsertWindow,
     EncodeStrategy,
@@ -39,7 +40,7 @@ pub enum ConfigError {
     #[error("insert window is larger than writable window")]
     InsertWindowError,
     #[error("error converting writable partitions to i64")]
-    WritablePartitionError(#[from] TryFromIntError),
+    WritablePartitionError(TryFromIntError),
 }
 
 impl Config {
@@ -70,10 +71,14 @@ pub enum StorageError {
     InvalidConfig(#[from] ConfigError),
     #[error("data point inserted outside of storage insert window")]
     OutOfBounds,
-    #[error("error inserting data point into partition")]
-    FailedInsert(#[from] PartitionError),
     #[error("can't find appropriate partition for data point")]
     PartitionNotFound,
+    #[error("error inserting data point into partition")]
+    FailedInsert(PartitionError),
+    #[error("failed to flush partition")]
+    FailedFlush(PartitionError),
+    #[error("failed to open partition")]
+    FailedOpen(disk::Error),
 }
 
 impl Storage {
@@ -104,46 +109,48 @@ impl Storage {
         Ok(())
     }
 
-    fn create_partition_with_row(&mut self, row: &Row) {
+    fn create_partition_with_row(&mut self, row: &Row) -> Result<(), StorageError> {
         self.partitions.push(Box::new(MemoryPartition::new(
             Some(self.config.partition_duration),
             row,
         )));
 
         // TODO: do this asynchronously
-        self.flush_partitions();
+        self.flush_partitions()
     }
 
-    fn flush_partitions(&mut self) {
+    fn flush_partitions(&mut self) -> Result<(), StorageError> {
         self.partitions
             .iter_mut()
             .rev()
             .enumerate()
-            .for_each(|(i, p)| {
+            .map(|(i, p)| {
                 if i < self.config.num_writable_partitions {
-                    return;
+                    // Writable partitions are expected not to be flushed.
+                    return Ok(());
                 }
 
-                // Flush partition and convert it to disk partition.
-                // TODO: make sure we're not re-flushing disk partitions here.
                 let dir_path = get_dir_path(&self.config.data_path, p.boundary());
                 if let Err(e) = p.flush(&dir_path, self.config.encode_strategy) {
-                    // TODO: handle flush error
-                    println!("error flushing partition {:?}", e);
-                    return;
+                    return match e {
+                        // Unflushable partitions are expected not to be flushed.
+                        // This prevents disk partitions from being flushed more than once.
+                        PartitionError::Unflushable => Ok(()),
+                        _ => Err(StorageError::FailedFlush(e)),
+                    };
                 }
                 match open(&dir_path) {
                     Ok(disk_partition) => {
                         // Swap the partition with a disk partition.
                         *p = Box::new(disk_partition);
+                        return Ok(());
                     }
                     Err(e) => {
-                        // TODO: handle open error
-                        println!("error opening partition {:?}", e);
-                        return;
+                        return Err(StorageError::FailedOpen(e));
                     }
                 }
-            });
+            })
+            .collect()
     }
 
     fn cascade_past_insert(&self, row: &Row) -> Result<(), StorageError> {
@@ -183,10 +190,10 @@ impl Storage {
                 PointPartitionOrdering::Current => {
                     p.insert(row).map_err(StorageError::FailedInsert)
                 }
-                PointPartitionOrdering::Future => Ok(self.create_partition_with_row(row)),
+                PointPartitionOrdering::Future => self.create_partition_with_row(row),
                 PointPartitionOrdering::Past => self.cascade_past_insert(row),
             },
-            None => Ok(self.create_partition_with_row(row)),
+            None => self.create_partition_with_row(row),
         }
     }
 }

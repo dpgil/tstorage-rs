@@ -92,8 +92,12 @@ impl Partition for DiskPartition {
         self.boundary().ordering(row.data_point.timestamp)
     }
 
-    fn flush(&self, _dir_path: &Path, _encode_strategy: EncodeStrategy) -> Result<()> {
-        Ok(())
+    fn flush(
+        &self,
+        _dir_path: &Path,
+        _encode_strategy: EncodeStrategy,
+    ) -> Result<(), PartitionError> {
+        Err(PartitionError::Unflushable)
     }
 
     fn boundary(&self) -> Boundary {
@@ -128,7 +132,7 @@ pub fn flush(
     partition: &MemoryPartition,
     dir_path: &Path,
     encode_strategy: EncodeStrategy,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     fs::create_dir_all(dir_path.clone())?;
 
     let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
@@ -251,7 +255,7 @@ pub mod tests {
         let partition = MemoryPartition::new(Some(100), &rows[0]);
         if let Some((_, remaining)) = rows.split_first() {
             for row in remaining {
-                partition.insert(row);
+                partition.insert(row).unwrap();
             }
         }
 

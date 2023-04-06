@@ -44,8 +44,12 @@ impl Partition for MemoryPartition {
         self.partition_boundary.ordering(row.data_point.timestamp)
     }
 
-    fn flush(&self, dir_path: &Path, encode_strategy: crate::EncodeStrategy) -> Result<()> {
-        flush(self, dir_path, encode_strategy)
+    fn flush(
+        &self,
+        dir_path: &Path,
+        encode_strategy: crate::EncodeStrategy,
+    ) -> Result<(), PartitionError> {
+        flush(self, dir_path, encode_strategy).map_err(PartitionError::Flush)
     }
 
     fn boundary(&self) -> Boundary {
@@ -192,7 +196,7 @@ pub mod tests {
         let (first, rest) = rows.split_first().unwrap();
         let partition = MemoryPartition::new(partition_duration, first);
         for row in rest {
-            partition.insert(row);
+            partition.insert(row).unwrap();
         }
         partition
     }
@@ -261,7 +265,7 @@ pub mod tests {
         };
 
         let partition = MemoryPartition::new(None, row_a);
-        partition.insert(row_b);
+        partition.insert(row_b).unwrap();
 
         let result = partition.select(metric_a, 1000, 2000).unwrap();
         assert_eq!(result.len(), 1);

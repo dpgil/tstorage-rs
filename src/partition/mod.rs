@@ -11,7 +11,8 @@ pub trait Partition {
     fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>>;
     fn insert(&self, row: &Row) -> Result<(), PartitionError>;
     fn ordering(&self, row: &Row) -> PointPartitionOrdering;
-    fn flush(&self, dir_path: &Path, encode_strategy: EncodeStrategy) -> Result<()>;
+    fn flush(&self, dir_path: &Path, encode_strategy: EncodeStrategy)
+        -> Result<(), PartitionError>;
     fn boundary(&self) -> Boundary;
 }
 
@@ -21,6 +22,12 @@ pub enum PartitionError {
     OutOfBounds,
     #[error("data points inserted into unwritable partition")]
     Unwritable,
+    #[error("partition is unable to be flushed")]
+    Unflushable,
+    #[error("error flushing partition")]
+    Flush(anyhow::Error),
+    #[error("error opening partition")]
+    Open(anyhow::Error),
 }
 
 // Terrible naming, but this represents whether a point belongs in
