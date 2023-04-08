@@ -45,11 +45,17 @@ pub enum ConfigError {
     #[error("hot_partitions is greater than max_partitions")]
     NumPartitionsError,
     #[error("error converting hot_partitions to i64")]
-    HotPartitionsError(TryFromIntError),
+    HotPartitionsFormatError(TryFromIntError),
+    #[error("hot partitions must be greater than zero to support writing data")]
+    HotPartitionsError,
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.hot_partitions == 0 {
+            return Err(ConfigError::HotPartitionsError);
+        }
+
         let hot_partitions_result: Result<i64, TryFromIntError> = self.hot_partitions.try_into();
         match hot_partitions_result {
             Ok(hot_partitions) => {
@@ -62,7 +68,7 @@ impl Config {
                 }
                 return Ok(());
             }
-            Err(e) => Err(ConfigError::HotPartitionsError(e)),
+            Err(e) => Err(ConfigError::HotPartitionsFormatError(e)),
         }
     }
 }
@@ -557,6 +563,18 @@ pub mod tests {
             partition_duration: 10,
             insert_window: 100,
             hot_partitions: 2,
+            data_path: String::from(""),
+            ..Default::default()
+        });
+        assert!(storage.is_err());
+    }
+
+    #[test]
+    fn test_storage_invalid_config_writable() {
+        let storage = Storage::new(Config {
+            partition_duration: 10,
+            insert_window: 0,
+            hot_partitions: 0,
             data_path: String::from(""),
             ..Default::default()
         });
