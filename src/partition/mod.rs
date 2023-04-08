@@ -14,6 +14,7 @@ pub trait Partition {
     fn flush(&self, dir_path: &Path, encode_strategy: EncodeStrategy)
         -> Result<(), PartitionError>;
     fn boundary(&self) -> Boundary;
+    fn clean(&self) -> Result<(), PartitionError>;
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -28,6 +29,8 @@ pub enum PartitionError {
     Flush,
     #[error("error opening partition")]
     Open,
+    #[error("failed to clean partition")]
+    Clean,
 }
 
 // Terrible naming, but this represents whether a point belongs in

@@ -18,6 +18,9 @@ use thiserror::Error;
 
 #[derive(Default)]
 pub struct Config {
+    // Maximum number of partitions to persist. The database will evict
+    // partitions older than this.
+    pub max_num_partitions: i64,
     // The size of partitions that store data points, in seconds.
     pub partition_duration: i64,
     // Tolerance for inserting out-of-order data points.
@@ -31,7 +34,7 @@ pub struct Config {
     pub data_path: String,
     // Type of encoder for data point encoding.
     pub encode_strategy: EncodeStrategy,
-    // Number of partitions to keep writable, remainder will be read-only.
+    // Number of partitions to keep writable, remaining will be read-only.
     pub num_writable_partitions: usize,
 }
 
@@ -39,7 +42,9 @@ pub struct Config {
 pub enum ConfigError {
     #[error("insert window is larger than writable window")]
     InsertWindowError,
-    #[error("error converting writable partitions to i64")]
+    #[error("max_num_partitions is less than num_writable_partitions")]
+    MaxNumPartitionsError,
+    #[error("error converting num_writable_partitions to i64")]
     WritablePartitionError(TryFromIntError),
 }
 
@@ -49,8 +54,12 @@ impl Config {
             self.num_writable_partitions.try_into();
         match num_writable_partitions_result {
             Ok(num_writable_partitions) => {
-                if self.insert_window > (num_writable_partitions * self.partition_duration) {
+                let writable_window = num_writable_partitions * self.partition_duration;
+                if self.insert_window > writable_window {
                     return Err(ConfigError::InsertWindowError);
+                }
+                if self.max_num_partitions < num_writable_partitions {
+                    return Err(ConfigError::MaxNumPartitionsError);
                 }
                 return Ok(());
             }
@@ -73,12 +82,16 @@ pub enum StorageError {
     OutOfBounds,
     #[error("can't find appropriate partition for data point")]
     PartitionNotFound,
+    #[error("no partitions")]
+    EmptyPartitionList,
     #[error("error inserting data point into partition")]
     FailedInsert(PartitionError),
     #[error("failed to flush partition")]
     FailedFlush(PartitionError),
     #[error("failed to open partition")]
     FailedOpen(disk::Error),
+    #[error("failed to clean partition")]
+    FailedClean(PartitionError),
 }
 
 impl Storage {
@@ -116,7 +129,28 @@ impl Storage {
         )));
 
         // TODO: do this asynchronously
+        self.remove_expired_partitions()?;
         self.flush_partitions()
+    }
+
+    fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
+        let retention_boundary = self.config.max_num_partitions * self.config.partition_duration;
+        let retain_after = match self.partitions.last() {
+            Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
+            None => Err(StorageError::EmptyPartitionList),
+        }?;
+
+        self.partitions.retain(|p| {
+            if p.boundary().max_timestamp() > retain_after {
+                return true;
+            }
+            // Expired partition, attempt to remove it. Keep the partition only
+            // if the clean failed, so we retry later on instead of leaking.
+            // TODO: propagate clean failures instead of silently attempting
+            // to clean over and over.
+            p.clean().is_err()
+        });
+        Ok(())
     }
 
     fn flush_partitions(&mut self) -> Result<(), StorageError> {
@@ -222,6 +256,7 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
             num_writable_partitions: 3,
+            max_num_partitions: 3,
             ..Default::default()
         })
         .unwrap();
@@ -277,6 +312,7 @@ pub mod tests {
             partition_duration: 100,
             insert_window: 5,
             num_writable_partitions: 2,
+            max_num_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -337,6 +373,7 @@ pub mod tests {
             partition_duration: 100,
             insert_window: 5,
             num_writable_partitions: 2,
+            max_num_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -384,6 +421,7 @@ pub mod tests {
             partition_duration: 2,
             insert_window: 2,
             num_writable_partitions: 2,
+            max_num_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -427,6 +465,7 @@ pub mod tests {
             partition_duration: 10,
             insert_window: 20,
             num_writable_partitions: 2,
+            max_num_partitions: 10,
             data_path: data_path.clone(),
             ..Default::default()
         })
@@ -470,6 +509,47 @@ pub mod tests {
         assert_eq!(result, expected);
 
         fs::remove_dir_all(data_path).unwrap();
+    }
+
+    #[test]
+    fn test_storage_retention() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 10,
+            num_writable_partitions: 1,
+            max_num_partitions: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 10,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 20, // start of 2nd partition, 1st should be removed at this point
+                value: 2.0,
+            },
+        ];
+
+        storage
+            .insert(&Row {
+                metric,
+                data_point: data_points[0],
+            })
+            .unwrap();
+        let result = storage.select(&metric.to_string(), 0, 50).unwrap();
+        assert_eq!(result, vec![data_points[0]]);
+
+        storage
+            .insert(&Row {
+                metric,
+                data_point: data_points[1],
+            })
+            .unwrap();
+        let result = storage.select(&metric.to_string(), 0, 50).unwrap();
+        assert_eq!(result, vec![data_points[1]]);
     }
 
     #[test]

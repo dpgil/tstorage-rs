@@ -1,6 +1,6 @@
-# rstorage
+# tstorage-rs
 
-Local time series storage in Rust. Modeled after nakabonne/tstorage.
+Embedded time series database in Rust. Modeled after nakabonne/tstorage.
 
 ## TODO
 

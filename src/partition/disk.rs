@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{self, BufReader, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use thiserror::Error;
 
@@ -55,6 +55,7 @@ pub struct PartitionMetadata {
 pub struct DiskPartition {
     metadata: PartitionMetadata,
     mapped_file: Mmap,
+    dir_path: PathBuf,
 }
 
 impl Partition for DiskPartition {
@@ -103,6 +104,10 @@ impl Partition for DiskPartition {
     fn boundary(&self) -> Boundary {
         self.metadata.boundary
     }
+
+    fn clean(&self) -> Result<(), PartitionError> {
+        fs::remove_dir_all(&self.dir_path).map_err(|_| PartitionError::Clean)
+    }
 }
 
 pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
@@ -125,6 +130,7 @@ pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
     Ok(DiskPartition {
         metadata: meta,
         mapped_file: mmap,
+        dir_path: dir_path.to_path_buf(),
     })
 }
 

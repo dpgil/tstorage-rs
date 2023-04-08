@@ -55,6 +55,12 @@ impl Partition for MemoryPartition {
     fn boundary(&self) -> Boundary {
         self.partition_boundary
     }
+
+    fn clean(&self) -> Result<(), PartitionError> {
+        // Memory held by this partition gets automatically removed
+        // when the variable is dropped.
+        Ok(())
+    }
 }
 
 impl MemoryPartition {
