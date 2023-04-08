@@ -10,13 +10,38 @@ I built this because I wanted to understand more about database implementation a
 
 ## Usage
 
-TODO: Show quick examples of using
+The following is an example of how to insert and select data from the database:
+
+```rust
+fn main() {
+    let mut storage = Storage::new(Config {
+        partition_duration: 100,
+        hot_partitions: 2,
+        max_partitions: 2,
+        ..Default::default()
+    }).unwrap();
+
+    storage.insert(&Row {
+        metric: "metric1",
+        data_point: DataPoint {
+            timestamp: 1600000000,
+            value: 0.1,
+        },
+    }).unwrap();
+
+    let points = storage.select("metric1", 1600000000, 1600000001).unwrap();
+    for p in points {
+        println!("timestamp: {}, value: {}", p.timestamp, p.value);
+        // => timestamp: 1600000000, value: 0.1
+    }
+}
+```
 
 ## Configuration
 
-The database stores points in "partitions," which are time-based chunks responsible for all data points within a specific time range. Partitions can be "hot" (in memory) or cold (on disk). When flushed to disk, all points in a partition are stored in the same file.
+The database stores points in "partitions," which are time-based chunks responsible for all data points within a specific time range. Partitions can be "hot" (in memory) or "cold" (on disk). When flushed to disk, all points in a partition are stored in the same file.
 
-The main settings that can be configured in the database are the partition size, the maximum number of parititons, and the number of partitions to keep in hot storage.
+The main settings that can be configured in the database are the partition size, the maximum number of parititons, and the number of partitions to keep in hot storage. When the number of hot partitions is equal to the maximum number of partitions, the database will operate completely in memory. Otherwise, partitions will be flushed to disk in the given data path and memory mapped according to the specified encoding strategy.
 
 ## Architecture
 
@@ -29,8 +54,10 @@ The main settings that can be configured in the database are the partition size,
 - ~~Support out-of-order data points~~
 - ~~Support benchmarks~~
 - Support disk partitions
-- Support WAL
 - Support Gorilla compression in disk partitions
+- Support WAL
+- Support metric labels
+- Support timestamp precision
 
 ## Implementation notes
 

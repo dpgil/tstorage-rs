@@ -580,4 +580,31 @@ pub mod tests {
         });
         assert!(storage.is_err());
     }
+
+    #[test]
+    fn test_storage_docs_example() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 100,
+            hot_partitions: 2,
+            max_partitions: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        storage
+            .insert(&Row {
+                metric: "metric1",
+                data_point: DataPoint {
+                    timestamp: 1600000000,
+                    value: 0.1,
+                },
+            })
+            .unwrap();
+
+        let points = storage.select("metric1", 1600000000, 1600000001).unwrap();
+        for p in points {
+            println!("timestamp: {}, value: {}", p.timestamp, p.value);
+            // => timestamp: 1600000000, value: 0.1
+        }
+    }
 }
