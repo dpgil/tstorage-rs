@@ -12,11 +12,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             let data_path = String::from("./test_bench_data");
             let mut storage = Storage::new(Config {
                 partition_duration: 10000,
-                max_num_partitions: 10,
+                hot_partitions: 2,
+                max_partitions: 10,
                 insert_window: 100,
                 data_path: data_path.clone(),
                 encode_strategy: EncodeStrategy::CSV,
-                num_writable_partitions: 2,
             })
             .unwrap();
             let num_metrics = 100_000;
@@ -43,11 +43,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data_path = String::from("./test_bench_data");
         let mut storage = Storage::new(Config {
             partition_duration: 1_000,
-            max_num_partitions: 10,
+            hot_partitions: 2,
+            max_partitions: 10,
             insert_window: 100,
             data_path: data_path.clone(),
             encode_strategy: EncodeStrategy::CSV,
-            num_writable_partitions: 2,
         })
         .unwrap();
         let num_metrics = 10_000;

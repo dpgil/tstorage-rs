@@ -18,9 +18,11 @@ use thiserror::Error;
 
 #[derive(Default)]
 pub struct Config {
+    // Number of partitions to keep in memory, remaining will be flushed to disk.
+    pub hot_partitions: usize,
     // Maximum number of partitions to persist. The database will evict
     // partitions older than this.
-    pub max_num_partitions: i64,
+    pub max_partitions: i64,
     // The size of partitions that store data points, in seconds.
     pub partition_duration: i64,
     // Tolerance for inserting out-of-order data points.
@@ -34,36 +36,33 @@ pub struct Config {
     pub data_path: String,
     // Type of encoder for data point encoding.
     pub encode_strategy: EncodeStrategy,
-    // Number of partitions to keep writable, remaining will be read-only.
-    pub num_writable_partitions: usize,
 }
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ConfigError {
     #[error("insert window is larger than writable window")]
     InsertWindowError,
-    #[error("max_num_partitions is less than num_writable_partitions")]
-    MaxNumPartitionsError,
-    #[error("error converting num_writable_partitions to i64")]
-    WritablePartitionError(TryFromIntError),
+    #[error("hot_partitions is greater than max_partitions")]
+    NumPartitionsError,
+    #[error("error converting hot_partitions to i64")]
+    HotPartitionsError(TryFromIntError),
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let num_writable_partitions_result: Result<i64, TryFromIntError> =
-            self.num_writable_partitions.try_into();
-        match num_writable_partitions_result {
-            Ok(num_writable_partitions) => {
-                let writable_window = num_writable_partitions * self.partition_duration;
+        let hot_partitions_result: Result<i64, TryFromIntError> = self.hot_partitions.try_into();
+        match hot_partitions_result {
+            Ok(hot_partitions) => {
+                let writable_window = hot_partitions * self.partition_duration;
                 if self.insert_window > writable_window {
                     return Err(ConfigError::InsertWindowError);
                 }
-                if self.max_num_partitions < num_writable_partitions {
-                    return Err(ConfigError::MaxNumPartitionsError);
+                if hot_partitions > self.max_partitions {
+                    return Err(ConfigError::NumPartitionsError);
                 }
                 return Ok(());
             }
-            Err(e) => Err(ConfigError::WritablePartitionError(e)),
+            Err(e) => Err(ConfigError::HotPartitionsError(e)),
         }
     }
 }
@@ -134,7 +133,7 @@ impl Storage {
     }
 
     fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
-        let retention_boundary = self.config.max_num_partitions * self.config.partition_duration;
+        let retention_boundary = self.config.max_partitions * self.config.partition_duration;
         let retain_after = match self.partitions.last() {
             Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
             None => Err(StorageError::EmptyPartitionList),
@@ -159,8 +158,8 @@ impl Storage {
             .rev()
             .enumerate()
             .map(|(i, p)| {
-                if i < self.config.num_writable_partitions {
-                    // Writable partitions are expected not to be flushed.
+                if i < self.config.hot_partitions {
+                    // Hot partitions are not flushed.
                     return Ok(());
                 }
 
@@ -192,7 +191,7 @@ impl Storage {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
                 let mut i = 1;
-                while i < self.config.num_writable_partitions {
+                while i < self.config.hot_partitions {
                     i += 1;
 
                     match iter.next() {
@@ -208,7 +207,7 @@ impl Storage {
                         None => return Err(StorageError::OutOfBounds),
                     }
                 }
-                // Unwritable point. This means insert_window > num_writable_partitions * partition_duration,
+                // Unwritable point. This means insert_window > hot_partitions * partition_duration,
                 // in other words, we're accepting points that later cannot be written. This is validated
                 // in the config during Storage construction so it's unexpected.
                 error!("partition not found for data point {:?}", row);
@@ -255,8 +254,8 @@ pub mod tests {
     fn test_storage_insert_multiple_partitions() {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
-            num_writable_partitions: 3,
-            max_num_partitions: 3,
+            hot_partitions: 3,
+            max_partitions: 3,
             ..Default::default()
         })
         .unwrap();
@@ -311,8 +310,8 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
-            num_writable_partitions: 2,
-            max_num_partitions: 2,
+            hot_partitions: 2,
+            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -372,8 +371,8 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 100,
             insert_window: 5,
-            num_writable_partitions: 2,
-            max_num_partitions: 2,
+            hot_partitions: 2,
+            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -420,8 +419,8 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 2,
             insert_window: 2,
-            num_writable_partitions: 2,
-            max_num_partitions: 2,
+            hot_partitions: 2,
+            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -464,8 +463,8 @@ pub mod tests {
         let mut storage = Storage::new(Config {
             partition_duration: 10,
             insert_window: 20,
-            num_writable_partitions: 2,
-            max_num_partitions: 10,
+            hot_partitions: 2,
+            max_partitions: 10,
             data_path: data_path.clone(),
             ..Default::default()
         })
@@ -515,8 +514,8 @@ pub mod tests {
     fn test_storage_retention() {
         let mut storage = Storage::new(Config {
             partition_duration: 10,
-            num_writable_partitions: 1,
-            max_num_partitions: 1,
+            hot_partitions: 1,
+            max_partitions: 1,
             ..Default::default()
         })
         .unwrap();
@@ -557,7 +556,7 @@ pub mod tests {
         let storage = Storage::new(Config {
             partition_duration: 10,
             insert_window: 100,
-            num_writable_partitions: 2,
+            hot_partitions: 2,
             data_path: String::from(""),
             ..Default::default()
         });
