@@ -45,11 +45,17 @@ pub enum ConfigError {
     #[error("hot_partitions is greater than max_partitions")]
     NumPartitionsError,
     #[error("error converting hot_partitions to i64")]
-    HotPartitionsError(TryFromIntError),
+    HotPartitionsFormatError(TryFromIntError),
+    #[error("hot partitions must be greater than zero to support writing data")]
+    HotPartitionsError,
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.hot_partitions == 0 {
+            return Err(ConfigError::HotPartitionsError);
+        }
+
         let hot_partitions_result: Result<i64, TryFromIntError> = self.hot_partitions.try_into();
         match hot_partitions_result {
             Ok(hot_partitions) => {
@@ -62,7 +68,7 @@ impl Config {
                 }
                 return Ok(());
             }
-            Err(e) => Err(ConfigError::HotPartitionsError(e)),
+            Err(e) => Err(ConfigError::HotPartitionsFormatError(e)),
         }
     }
 }
@@ -561,5 +567,44 @@ pub mod tests {
             ..Default::default()
         });
         assert!(storage.is_err());
+    }
+
+    #[test]
+    fn test_storage_invalid_config_writable() {
+        let storage = Storage::new(Config {
+            partition_duration: 10,
+            insert_window: 0,
+            hot_partitions: 0,
+            data_path: String::from(""),
+            ..Default::default()
+        });
+        assert!(storage.is_err());
+    }
+
+    #[test]
+    fn test_storage_docs_example() {
+        let mut storage = Storage::new(Config {
+            partition_duration: 100,
+            hot_partitions: 2,
+            max_partitions: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        storage
+            .insert(&Row {
+                metric: "metric1",
+                data_point: DataPoint {
+                    timestamp: 1600000000,
+                    value: 0.1,
+                },
+            })
+            .unwrap();
+
+        let points = storage.select("metric1", 1600000000, 1600000001).unwrap();
+        for p in points {
+            println!("timestamp: {}, value: {}", p.timestamp, p.value);
+            // => timestamp: 1600000000, value: 0.1
+        }
     }
 }
