@@ -47,9 +47,7 @@ impl<R: Read> CsvDecoder<R> {
             reader: BufReader::new(readable),
         }
     }
-}
 
-impl<R: Read> Decoder for CsvDecoder<R> {
     fn decode_point(&mut self) -> Result<DataPoint> {
         let mut buf = String::new();
         self.reader.read_line(&mut buf)?;
@@ -71,6 +69,16 @@ impl<R: Read> Decoder for CsvDecoder<R> {
             .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
 
         Ok(DataPoint { timestamp, value })
+    }
+}
+
+impl<R: Read> Decoder for CsvDecoder<R> {
+    fn decode_points(&mut self, n: usize) -> Result<Vec<DataPoint>> {
+        let mut points: Vec<DataPoint> = Vec::new();
+        for _ in 0..n {
+            points.push(self.decode_point()?);
+        }
+        Ok(points)
     }
 }
 
@@ -178,19 +186,19 @@ pub mod tests {
 
     #[test]
     fn test_decode() {
-        let data_point = DataPoint {
+        let data_points = &[DataPoint {
             timestamp: 123,
             value: 1.0,
-        };
+        }];
         let buf = Vec::new();
         let fake_file = FakeFile::new(buf);
         let mut encoder = CsvEncoder::new(fake_file);
-        encoder.encode_points(&[data_point]).unwrap();
+        encoder.encode_points(data_points).unwrap();
         encoder.flush().unwrap();
         let mut fake_file = encoder.writer.into_inner().unwrap();
         fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
         let mut decoder = CsvDecoder::new(fake_file);
-        let actual = decoder.decode_point().unwrap();
-        assert_eq!(actual, data_point);
+        let actual = decoder.decode_points(1).unwrap();
+        assert_eq!(actual, data_points);
     }
 }

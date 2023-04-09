@@ -70,18 +70,10 @@ impl Partition for DiskPartition {
             self.metadata.encode_strategy,
             &self.mapped_file[meta.start_offset..meta.end_offset],
         );
-
-        let mut points: Vec<DataPoint> = Vec::with_capacity(meta.num_data_points);
-        for _ in 0..meta.num_data_points {
-            let data_point = decoder.decode_point()?;
-            if data_point.timestamp < start {
-                continue;
-            }
-            if data_point.timestamp >= end {
-                break;
-            }
-            points.push(data_point);
-        }
+        let mut points: Vec<DataPoint> = decoder.decode_points(meta.num_data_points)?;
+        points.retain(|dp| {
+            dp.timestamp >= start && dp.timestamp < end
+        });
         Ok(points)
     }
 

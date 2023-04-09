@@ -48,7 +48,7 @@ pub struct GorillaDecoder<R: Read> {
 }
 
 impl <R: Read> Decoder for GorillaDecoder<R> {
-    fn decode_point(&mut self) -> std::io::Result<crate::DataPoint> {
+    fn decode_points(&mut self, n: usize) -> std::io::Result<Vec<crate::DataPoint>> {
         todo!()
     }
 }

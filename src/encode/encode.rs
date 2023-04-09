@@ -18,7 +18,7 @@ pub trait Encoder {
 }
 
 pub trait Decoder {
-    fn decode_point(&mut self) -> Result<DataPoint>;
+    fn decode_points(&mut self, n: usize) -> Result<Vec<DataPoint>>;
 }
 
 pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writable: W) -> impl Encoder {
