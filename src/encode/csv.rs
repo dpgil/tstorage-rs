@@ -20,9 +20,12 @@ impl<W: Write + Seek> CsvEncoder<W> {
 }
 
 impl<W: Write + Seek> Encoder for CsvEncoder<W> {
-    fn encode_point(&mut self, data_point: &DataPoint) -> Result<()> {
-        self.writer
-            .write_all(format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes())
+    fn encode_points(&mut self, data_points: &[DataPoint]) -> Result<()> {
+        for data_point in data_points {
+            self.writer
+                .write_all(format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes())?
+        }
+        Ok(())
     }
 
     fn get_current_offset(&mut self) -> Result<u64> {
@@ -140,10 +143,10 @@ pub mod tests {
         let fake_file = FakeFile::new(buf);
         let mut encoder = CsvEncoder::new(fake_file);
         encoder
-            .encode_point(&DataPoint {
+            .encode_points(&[DataPoint {
                 timestamp: 123,
                 value: 1.0,
-            })
+            }])
             .unwrap();
         encoder.flush().unwrap();
         let fake_file = encoder.writer.into_inner().unwrap();
@@ -156,16 +159,16 @@ pub mod tests {
         let fake_file = FakeFile::new(buf);
         let mut encoder = CsvEncoder::new(fake_file);
         encoder
-            .encode_point(&DataPoint {
-                timestamp: 123,
-                value: 1.0,
-            })
-            .unwrap();
-        encoder
-            .encode_point(&DataPoint {
-                timestamp: 456,
-                value: 2.0,
-            })
+            .encode_points(&[
+                DataPoint {
+                    timestamp: 123,
+                    value: 1.0,
+                },
+                DataPoint {
+                    timestamp: 456,
+                    value: 2.0,
+                },
+            ])
             .unwrap();
         encoder.flush().unwrap();
         assert_eq!(encoder.get_current_offset().unwrap(), 12); // "123,1\n456,2\n".len()
@@ -182,7 +185,7 @@ pub mod tests {
         let buf = Vec::new();
         let fake_file = FakeFile::new(buf);
         let mut encoder = CsvEncoder::new(fake_file);
-        encoder.encode_point(&data_point).unwrap();
+        encoder.encode_points(&[data_point]).unwrap();
         encoder.flush().unwrap();
         let mut fake_file = encoder.writer.into_inner().unwrap();
         fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();

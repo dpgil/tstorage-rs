@@ -12,7 +12,7 @@ pub enum EncodeStrategy {
 }
 
 pub trait Encoder {
-    fn encode_point(&mut self, data_point: &DataPoint) -> Result<()>;
+    fn encode_points(&mut self, data_points: &[DataPoint]) -> Result<()>;
     fn get_current_offset(&mut self) -> Result<u64>;
     fn flush(&mut self) -> Result<()>;
 }

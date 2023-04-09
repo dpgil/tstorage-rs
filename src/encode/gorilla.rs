@@ -23,21 +23,7 @@ impl<W: Write + Seek> GorillaEncoder<W> {
 }
 
 impl<W: Write + Seek> Encoder for GorillaEncoder<W> {
-    fn encode_point(&mut self, data_point: &crate::DataPoint) -> std::io::Result<()> {
-        self.buf.push(*data_point);
-        Ok(())
-    }
-
-    fn get_current_offset(&mut self) -> std::io::Result<u64> {
-        self.flush()?;
-        self.sink.seek(std::io::SeekFrom::Current(0))
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        if self.buf.is_empty() {
-            return Ok(());
-        }
-
+    fn encode_points(&mut self, data_points: &[crate::DataPoint]) -> std::io::Result<()> {
         let tsz_writer = BufferedWriter::new();
         let mut tsz_encoder = StdEncoder::new(self.buf[0].timestamp as u64, tsz_writer);
         for data_point in &self.buf {
@@ -47,10 +33,15 @@ impl<W: Write + Seek> Encoder for GorillaEncoder<W> {
             ));
         }
         let bytes = tsz_encoder.close();
+        self.sink.write_all(&bytes)
+    }
 
-        self.sink.write_all(&bytes)?;
-        self.buf.clear();
-        Ok(())
+    fn get_current_offset(&mut self) -> std::io::Result<u64> {
+        self.sink.seek(std::io::SeekFrom::Current(0))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.sink.flush()
     }
 }
 
