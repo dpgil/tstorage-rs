@@ -15,9 +15,11 @@ The following is an example of how to insert and select data from the database:
 ```rust
 fn main() {
     let mut storage = Storage::new(Config {
-        partition_duration: 100,
-        hot_partitions: 2,
-        max_partitions: 2,
+        partition: PartitionConfig {
+            duration: 100,
+            hot_partitions: 2,
+            max_partitions: 2,
+        },
         ..Default::default()
     }).unwrap();
 
