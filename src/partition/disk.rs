@@ -168,9 +168,7 @@ pub fn flush(
         // Find the current offset in the file, since we don't know how much
         // the encoder moved the pointer.
         let start_offset = encoder.get_current_offset().unwrap();
-        for data_point in metric_entry.data_points.iter() {
-            encoder.encode_point(data_point)?;
-        }
+        encoder.encode_points(&metric_entry.data_points)?;
         let end_offset = encoder.get_current_offset().unwrap();
         let num_data_points = metric_entry.data_points.len();
         total_data_points += num_data_points;
