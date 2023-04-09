@@ -18,13 +18,8 @@ use thiserror::Error;
 
 #[derive(Default)]
 pub struct Config {
-    // Number of partitions to keep in memory, remaining will be flushed to disk.
-    pub hot_partitions: usize,
-    // Maximum number of partitions to persist. The database will evict
-    // partitions older than this.
-    pub max_partitions: i64,
-    // The size of partitions that store data points, in seconds.
-    pub partition_duration: i64,
+    pub partition: PartitionConfig,
+    pub disk: Option<DiskConfig>,
     // Tolerance for inserting out-of-order data points.
     // Given the last data point inserted with timestamp t,
     // the insert window will allow a data point with a timestamp
@@ -32,9 +27,24 @@ pub struct Config {
     // An insert_window of 0 means out-of-order inserts are not
     // allowed.
     pub insert_window: i64,
+}
+
+#[derive(Default)]
+pub struct PartitionConfig {
+    // Number of partitions to keep in memory, remaining will be flushed to disk.
+    pub hot_partitions: usize,
+    // Maximum number of partitions to persist. The database will evict
+    // partitions older than this.
+    pub max_partitions: i64,
+    // The size of partitions that store data points, in seconds.
+    pub duration: i64,
+}
+
+#[derive(Default)]
+pub struct DiskConfig {
     // Path to where disk partitions are stored.
     pub data_path: String,
-    // Type of encoder for data point encoding.
+    // Type of encoder for data point encoding when flushing to disk.
     pub encode_strategy: EncodeStrategy,
 }
 
@@ -48,23 +58,29 @@ pub enum ConfigError {
     HotPartitionsFormatError(TryFromIntError),
     #[error("hot partitions must be greater than zero to support writing data")]
     HotPartitionsError,
+    #[error("disk config required when hot_partitions != max_partitions")]
+    DiskConfigError,
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.hot_partitions == 0 {
+        if self.partition.hot_partitions == 0 {
             return Err(ConfigError::HotPartitionsError);
         }
 
-        let hot_partitions_result: Result<i64, TryFromIntError> = self.hot_partitions.try_into();
+        let hot_partitions_result: Result<i64, TryFromIntError> =
+            self.partition.hot_partitions.try_into();
         match hot_partitions_result {
             Ok(hot_partitions) => {
-                let writable_window = hot_partitions * self.partition_duration;
+                let writable_window = hot_partitions * self.partition.duration;
                 if self.insert_window > writable_window {
                     return Err(ConfigError::InsertWindowError);
                 }
-                if hot_partitions > self.max_partitions {
+                if hot_partitions > self.partition.max_partitions {
                     return Err(ConfigError::NumPartitionsError);
+                }
+                if hot_partitions < self.partition.max_partitions && self.disk.is_none() {
+                    return Err(ConfigError::DiskConfigError);
                 }
                 return Ok(());
             }
@@ -75,8 +91,9 @@ impl Config {
 
 pub struct Storage {
     partitions: Vec<Box<dyn Partition>>,
-    config: Config,
     insert_window: InsertWindow,
+    partition_config: PartitionConfig,
+    disk_config: DiskConfig,
 }
 
 #[derive(Error, Debug)]
@@ -106,7 +123,8 @@ impl Storage {
         Ok(Self {
             partitions: vec![],
             insert_window: InsertWindow::new(config.insert_window),
-            config,
+            partition_config: config.partition,
+            disk_config: config.disk.unwrap_or_default(),
         })
     }
 
@@ -129,7 +147,7 @@ impl Storage {
 
     fn create_partition_with_row(&mut self, row: &Row) -> Result<(), StorageError> {
         self.partitions.push(Box::new(MemoryPartition::new(
-            Some(self.config.partition_duration),
+            Some(self.partition_config.duration),
             row,
         )));
 
@@ -139,7 +157,8 @@ impl Storage {
     }
 
     fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
-        let retention_boundary = self.config.max_partitions * self.config.partition_duration;
+        let retention_boundary =
+            self.partition_config.max_partitions * self.partition_config.duration;
         let retain_after = match self.partitions.last() {
             Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
             None => Err(StorageError::EmptyPartitionList),
@@ -164,13 +183,13 @@ impl Storage {
             .rev()
             .enumerate()
             .map(|(i, p)| {
-                if i < self.config.hot_partitions {
+                if i < self.partition_config.hot_partitions {
                     // Hot partitions are not flushed.
                     return Ok(());
                 }
 
-                let dir_path = get_dir_path(&self.config.data_path, p.boundary());
-                if let Err(e) = p.flush(&dir_path, self.config.encode_strategy) {
+                let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
+                if let Err(e) = p.flush(&dir_path, self.disk_config.encode_strategy) {
                     return match e {
                         // Unflushable partitions are expected not to be flushed.
                         // This prevents disk partitions from being flushed more than once.
@@ -197,7 +216,7 @@ impl Storage {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
                 let mut i = 1;
-                while i < self.config.hot_partitions {
+                while i < self.partition_config.hot_partitions {
                     i += 1;
 
                     match iter.next() {
@@ -251,7 +270,7 @@ pub mod tests {
 
     use crate::{
         metric::{DataPoint, Row},
-        storage::StorageError,
+        storage::{ConfigError, DiskConfig, PartitionConfig, StorageError},
     };
 
     use super::{Config, Storage};
@@ -259,9 +278,11 @@ pub mod tests {
     #[test]
     fn test_storage_insert_multiple_partitions() {
         let mut storage = Storage::new(Config {
-            partition_duration: 2,
-            hot_partitions: 3,
-            max_partitions: 3,
+            partition: PartitionConfig {
+                duration: 2,
+                hot_partitions: 3,
+                max_partitions: 3,
+            },
             ..Default::default()
         })
         .unwrap();
@@ -314,10 +335,12 @@ pub mod tests {
     #[test]
     fn test_storage_insert_window() {
         let mut storage = Storage::new(Config {
-            partition_duration: 100,
+            partition: PartitionConfig {
+                duration: 100,
+                hot_partitions: 2,
+                max_partitions: 2,
+            },
             insert_window: 5,
-            hot_partitions: 2,
-            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -375,10 +398,12 @@ pub mod tests {
     // any delayed timestamps.
     fn test_storage_martian_point() {
         let mut storage = Storage::new(Config {
-            partition_duration: 100,
+            partition: PartitionConfig {
+                duration: 100,
+                hot_partitions: 2,
+                max_partitions: 2,
+            },
             insert_window: 5,
-            hot_partitions: 2,
-            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -423,10 +448,12 @@ pub mod tests {
     #[test]
     fn test_storage_insert_window_across_partitions() {
         let mut storage = Storage::new(Config {
-            partition_duration: 2,
+            partition: PartitionConfig {
+                duration: 2,
+                hot_partitions: 2,
+                max_partitions: 2,
+            },
             insert_window: 2,
-            hot_partitions: 2,
-            max_partitions: 2,
             ..Default::default()
         })
         .unwrap();
@@ -467,11 +494,16 @@ pub mod tests {
     fn test_storage_memory_and_disk_partitions() {
         let data_path = String::from("./test_storage_memory_and_disk_partitions");
         let mut storage = Storage::new(Config {
-            partition_duration: 10,
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 2,
+                max_partitions: 10,
+            },
+            disk: Some(DiskConfig {
+                data_path: data_path.clone(),
+                ..Default::default()
+            }),
             insert_window: 20,
-            hot_partitions: 2,
-            max_partitions: 10,
-            data_path: data_path.clone(),
             ..Default::default()
         })
         .unwrap();
@@ -519,9 +551,11 @@ pub mod tests {
     #[test]
     fn test_storage_retention() {
         let mut storage = Storage::new(Config {
-            partition_duration: 10,
-            hot_partitions: 1,
-            max_partitions: 1,
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 1,
+                max_partitions: 1,
+            },
             ..Default::default()
         })
         .unwrap();
@@ -560,33 +594,80 @@ pub mod tests {
     #[test]
     fn test_storage_invalid_config() {
         let storage = Storage::new(Config {
-            partition_duration: 10,
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 2,
+                max_partitions: 10,
+            },
+            disk: Some(DiskConfig {
+                data_path: String::from(""),
+                ..Default::default()
+            }),
             insert_window: 100,
-            hot_partitions: 2,
-            data_path: String::from(""),
             ..Default::default()
         });
         assert!(storage.is_err());
     }
 
     #[test]
-    fn test_storage_invalid_config_writable() {
-        let storage = Storage::new(Config {
-            partition_duration: 10,
+    fn test_invalid_config_no_hot_partitions() {
+        let config = Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 0,
+                max_partitions: 0,
+            },
             insert_window: 0,
-            hot_partitions: 0,
-            data_path: String::from(""),
             ..Default::default()
-        });
-        assert!(storage.is_err());
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::HotPartitionsError)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_config_writable_window() {
+        let config = Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 10,
+                max_partitions: 10,
+            },
+            insert_window: 200,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InsertWindowError)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_config_disk() {
+        let config = Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 9,
+                max_partitions: 10,
+            },
+            insert_window: 20,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::DiskConfigError)
+        ));
     }
 
     #[test]
     fn test_storage_docs_example() {
         let mut storage = Storage::new(Config {
-            partition_duration: 100,
-            hot_partitions: 2,
-            max_partitions: 2,
+            partition: PartitionConfig {
+                duration: 100,
+                hot_partitions: 2,
+                max_partitions: 2,
+            },
             ..Default::default()
         })
         .unwrap();

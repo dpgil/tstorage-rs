@@ -2,7 +2,7 @@ use std::fs;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rstorage::{
-    storage::{Config, Storage},
+    storage::{Config, DiskConfig, PartitionConfig, Storage},
     DataPoint, EncodeStrategy, Row,
 };
 
@@ -11,12 +11,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let data_path = String::from("./test_bench_data");
             let mut storage = Storage::new(Config {
-                partition_duration: 10000,
-                hot_partitions: 2,
-                max_partitions: 10,
+                partition: PartitionConfig {
+                    duration: 10000,
+                    hot_partitions: 2,
+                    max_partitions: 10,
+                },
+                disk: Some(DiskConfig {
+                    data_path: data_path.clone(),
+                    encode_strategy: EncodeStrategy::CSV,
+                }),
                 insert_window: 100,
-                data_path: data_path.clone(),
-                encode_strategy: EncodeStrategy::CSV,
             })
             .unwrap();
             let num_metrics = 100_000;
@@ -42,12 +46,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("select", |b| {
         let data_path = String::from("./test_bench_data");
         let mut storage = Storage::new(Config {
-            partition_duration: 1_000,
-            hot_partitions: 2,
-            max_partitions: 10,
+            partition: PartitionConfig {
+                duration: 1_000,
+                hot_partitions: 2,
+                max_partitions: 10,
+            },
+            disk: Some(DiskConfig {
+                data_path: data_path.clone(),
+                encode_strategy: EncodeStrategy::CSV,
+            }),
             insert_window: 100,
-            data_path: data_path.clone(),
-            encode_strategy: EncodeStrategy::CSV,
         })
         .unwrap();
         let num_metrics = 10_000;
