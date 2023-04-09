@@ -1,8 +1,8 @@
-use std::io::{BufWriter, Seek, Write};
+use std::io::{BufWriter, Seek, Write, Read, BufReader};
 
 use tsz::{stream::BufferedWriter, DataPoint, Encode, StdEncoder};
 
-use super::encode::Encoder;
+use super::encode::{Encoder, Decoder};
 
 pub struct GorillaEncoder<W: Write + Seek> {
     pub sink: BufWriter<W>,
@@ -51,5 +51,15 @@ impl<W: Write + Seek> Encoder for GorillaEncoder<W> {
         self.sink.write_all(&bytes)?;
         self.buf.clear();
         Ok(())
+    }
+}
+
+pub struct GorillaDecoder<R: Read> {
+    reader: BufReader<R>,
+}
+
+impl <R: Read> Decoder for GorillaDecoder<R> {
+    fn decode_point(&mut self) -> std::io::Result<crate::DataPoint> {
+        todo!()
     }
 }
