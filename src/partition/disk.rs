@@ -25,7 +25,7 @@ pub const META_FILE_NAME: &str = "meta.json";
 pub enum Error {
     #[error("error opening file")]
     FileError(#[from] io::Error),
-    #[error("not data points in data file")]
+    #[error("no data points in data file")]
     NoDataPointsError,
     #[error("error unmarshaling meta.json")]
     UnmarshalMetaFileError(#[from] serde_json::Error),
@@ -132,6 +132,21 @@ pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
         mapped_file: mmap,
         dir_path: dir_path.to_path_buf(),
     })
+}
+
+pub fn open_all(dir_path: &str) -> Result<Vec<Box<dyn Partition>>, Error> {
+    let mut partitions: Vec<Box<dyn Partition>> = vec![];
+    fs::create_dir_all(dir_path).map_err(|e| Error::FileError(e))?;
+    let paths = fs::read_dir(dir_path).map_err(|e| Error::FileError(e))?;
+    for path in paths {
+        let dir_entry = match path {
+            Ok(p) => Ok(p),
+            Err(e) => Err(Error::FileError(e)),
+        }?;
+        let disk_partition = open(&dir_entry.path())?;
+        partitions.push(Box::new(disk_partition));
+    }
+    Ok(partitions)
 }
 
 pub fn flush(

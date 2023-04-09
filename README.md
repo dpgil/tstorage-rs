@@ -51,7 +51,7 @@ The main settings that can be configured in the database are the partition size,
 - ~~Support in-memory partitions~~
 - ~~Support out-of-order data points~~
 - ~~Support benchmarks~~
-- Support disk partitions
+- ~~Support disk partitions~~
 - Support Gorilla compression in disk partitions
 - Support WAL
 - Support metric labels

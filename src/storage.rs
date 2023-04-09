@@ -1,7 +1,7 @@
 use crate::{
     metric::{DataPoint, Row},
     partition::{
-        disk::{self, open},
+        disk::{self, open, open_all},
         memory::MemoryPartition,
         Boundary, Partition, PartitionError, PointPartitionOrdering,
     },
@@ -111,7 +111,7 @@ pub enum StorageError {
     #[error("failed to flush partition")]
     FailedFlush(PartitionError),
     #[error("failed to open partition")]
-    FailedOpen(disk::Error),
+    FailedOpen(#[from] disk::Error),
     #[error("failed to clean partition")]
     FailedClean(PartitionError),
 }
@@ -120,8 +120,13 @@ impl Storage {
     pub fn new(config: Config) -> Result<Self, StorageError> {
         config.validate()?;
 
+        let partitions: Vec<Box<dyn Partition>> = match config.disk.as_ref() {
+            Some(disk_config) => open_all(&disk_config.data_path)?,
+            None => vec![],
+        };
+
         Ok(Self {
-            partitions: vec![],
+            partitions,
             insert_window: InsertWindow::new(config.insert_window),
             partition_config: config.partition,
             disk_config: config.disk.unwrap_or_default(),
@@ -687,5 +692,28 @@ pub mod tests {
             println!("timestamp: {}, value: {}", p.timestamp, p.value);
             // => timestamp: 1600000000, value: 0.1
         }
+    }
+
+    #[test]
+    fn test_storage_with_existing_partitions() {
+        let storage = Storage::new(Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 2,
+                max_partitions: 10,
+            },
+            disk: Some(DiskConfig {
+                data_path: String::from("tests/fixtures/test_open_existing_partitions"),
+                ..Default::default()
+            }),
+            insert_window: 20,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(storage.partitions.len(), 2);
+
+        let result = storage.select("metric1", 0, 300).unwrap();
+        assert_eq!(result.len(), 6);
     }
 }

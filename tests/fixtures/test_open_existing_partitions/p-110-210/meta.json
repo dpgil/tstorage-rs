@@ -1,0 +1,1 @@
+{"boundary":{"min_timestamp":110,"max_timestamp":210},"num_data_points":3,"metrics":{"metric1":{"name":"metric1","start_offset":0,"end_offset":20,"boundary":{"min_timestamp":110,"max_timestamp":120},"num_data_points":3}},"created_at":1681004782,"encode_strategy":"CSV"}
