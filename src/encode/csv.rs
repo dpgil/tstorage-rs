@@ -19,6 +19,13 @@ impl<W: Write + Seek> CsvEncoder<W> {
     }
 }
 
+pub fn encode_points<W: Write>(writable: &mut W, data_points: &[DataPoint]) -> Result<()> {
+    for data_point in data_points {
+        writable.write_all(format!("{},{}\n", data_point.timestamp, data_point.value).as_bytes())?
+    }
+    Ok(())
+}
+
 impl<W: Write + Seek> Encoder for CsvEncoder<W> {
     fn encode_points(&mut self, data_points: &[DataPoint]) -> Result<()> {
         for data_point in data_points {

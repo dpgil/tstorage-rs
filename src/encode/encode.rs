@@ -21,9 +21,13 @@ pub trait Decoder {
     fn decode_points(&mut self, n: usize) -> Result<Vec<DataPoint>>;
 }
 
-pub fn get_encoder<W: Write + Seek>(encode_strategy: EncodeStrategy, writable: W) -> impl Encoder {
+pub fn encode_points<W: Write>(
+    writable: &mut W,
+    data_points: &[DataPoint],
+    encode_strategy: EncodeStrategy,
+) -> Result<()> {
     match encode_strategy {
-        EncodeStrategy::CSV => CsvEncoder::new(writable),
+        EncodeStrategy::CSV => super::csv::encode_points(writable, data_points),
     }
 }
 
