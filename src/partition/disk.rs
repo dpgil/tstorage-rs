@@ -11,7 +11,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    encode::encode::{decode_points, encode_points, EncodeStrategy},
+    encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
     Row,
 };
@@ -149,7 +149,6 @@ pub fn flush(
     let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
     let data = File::create(data_file_path)?;
     let mut writer = BufWriter::new(data);
-    // let mut encoder = get_encoder(encode_strategy, data);
     let mut metrics = HashMap::<String, MetricMetadata>::new();
     let mut total_data_points = 0;
     let min_timestamp = partition.min_timestamp();
@@ -159,11 +158,8 @@ pub fn flush(
         // Find the current offset in the file, since we don't know how much
         // the encoder moved the pointer.
         let start_offset = writer.seek(std::io::SeekFrom::Current(0)).unwrap();
-        // let start_offset = encoder.get_current_offset().unwrap();
         encode_points(&mut writer, &metric_entry.data_points, encode_strategy)?;
-        // encoder.encode_points(&metric_entry.data_points)?;
         let end_offset = writer.seek(std::io::SeekFrom::Current(0)).unwrap();
-        // let end_offset = encoder.get_current_offset().unwrap();
         let num_data_points = metric_entry.data_points.len();
         total_data_points += num_data_points;
         metrics.insert(
@@ -181,7 +177,6 @@ pub fn flush(
         );
     }
     writer.flush()?;
-    // encoder.flush()?;
 
     let partition_metadata = PartitionMetadata {
         boundary: Boundary {
@@ -205,7 +200,7 @@ pub mod tests {
     use std::{fs, path::Path};
 
     use crate::{
-        encode::encode::EncodeStrategy,
+        encode::EncodeStrategy,
         metric::{DataPoint, Row},
         partition::{
             disk::{flush, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
