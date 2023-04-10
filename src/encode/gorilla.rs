@@ -62,7 +62,13 @@ pub fn decode_points(bytes: &[u8], n: usize) -> Result<Vec<crate::DataPoint>> {
 pub mod tests {
     use std::io::Write;
 
-    use crate::{encode::{test::fake_file::FakeFile, gorilla::{encode_points, decode_points}}, DataPoint};
+    use crate::{
+        encode::{
+            gorilla::{decode_points, encode_points},
+            test::fake_file::FakeFile,
+        },
+        DataPoint,
+    };
 
     #[test]
     fn test_encode_decode() {
@@ -72,13 +78,9 @@ pub mod tests {
             timestamp: 123,
             value: 1.0,
         }];
-        encode_points(
-            &mut fake_file,
-            &expected_points,
-        )
-        .unwrap();
+        encode_points(&mut fake_file, &expected_points).unwrap();
         fake_file.flush().unwrap();
-        
+
         let actual_points = decode_points(&fake_file.buf, 1).unwrap();
         assert_eq!(actual_points, expected_points);
     }

@@ -66,11 +66,7 @@ pub mod tests {
             timestamp: 123,
             value: 1.0,
         }];
-        encode_points(
-            &mut fake_file,
-            &expected_points,
-        )
-        .unwrap();
+        encode_points(&mut fake_file, &expected_points).unwrap();
         fake_file.flush().unwrap();
         fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
         let actual_points = decode_points(fake_file, 1).unwrap();
