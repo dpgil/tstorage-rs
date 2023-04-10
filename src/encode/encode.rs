@@ -1,6 +1,6 @@
 use crate::metric::DataPoint;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Result, Write};
+use std::io::{Result, Write};
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 pub enum EncodeStrategy {
@@ -20,13 +20,13 @@ pub fn encode_points<W: Write>(
     }
 }
 
-pub fn decode_points<R: Read>(
-    readable: R,
+pub fn decode_points(
+    bytes: &[u8],
     n: usize,
     encode_strategy: EncodeStrategy,
 ) -> Result<Vec<DataPoint>> {
     match encode_strategy {
-        EncodeStrategy::CSV => super::csv::decode_points(readable, n),
-        EncodeStrategy::Gorilla => todo!(),
+        EncodeStrategy::CSV => super::csv::decode_points(bytes, n),
+        EncodeStrategy::Gorilla => super::gorilla::decode_points(bytes, n),
     }
 }

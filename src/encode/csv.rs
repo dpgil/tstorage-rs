@@ -52,6 +52,12 @@ pub mod tests {
         metric::DataPoint,
     };
 
+    impl FakeFile {
+        pub fn new(buf: Vec<u8>) -> Self {
+            Self { buf, pos: 0 }
+        }
+    }
+
     #[test]
     fn test_encode() {
         let buf = Vec::new();

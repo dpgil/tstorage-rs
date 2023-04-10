@@ -5,14 +5,8 @@ use std::{
 
 #[derive(Debug)]
 pub struct FakeFile {
-    pub buf: Vec<u8>,
-    pos: u64,
-}
-
-impl FakeFile {
-    pub fn new(buf: Vec<u8>) -> Self {
-        Self { buf, pos: 0 }
-    }
+    pub(crate) buf: Vec<u8>,
+    pub(crate) pos: u64,
 }
 
 impl Seek for FakeFile {
