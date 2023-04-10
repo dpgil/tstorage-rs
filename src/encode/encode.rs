@@ -9,16 +9,6 @@ pub enum EncodeStrategy {
     Gorilla,
 }
 
-pub trait Encoder {
-    fn encode_points(&mut self, data_points: &[DataPoint]) -> Result<()>;
-    fn get_current_offset(&mut self) -> Result<u64>;
-    fn flush(&mut self) -> Result<()>;
-}
-
-pub trait Decoder {
-    fn decode_points(&mut self, n: usize) -> Result<Vec<DataPoint>>;
-}
-
 pub fn encode_points<W: Write>(
     writable: &mut W,
     data_points: &[DataPoint],
