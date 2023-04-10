@@ -1,23 +1,9 @@
-use std::io::{BufReader, BufWriter, Read, Seek, Write};
-
+use std::io::{BufReader, Read, Result, Write};
 use tsz::{stream::BufferedWriter, DataPoint, Encode, StdEncoder};
 
-pub struct GorillaEncoder<W: Write + Seek> {
-    pub writer: BufWriter<W>,
-}
+use crate::EncodeStrategy;
 
-impl<W: Write + Seek> GorillaEncoder<W> {
-    pub fn new(writable: W) -> Self {
-        Self {
-            writer: BufWriter::new(writable),
-        }
-    }
-}
-
-pub fn encode_points<W: Write>(
-    writable: &mut W,
-    data_points: &[crate::DataPoint],
-) -> std::io::Result<()> {
+pub fn encode_points<W: Write>(writable: &mut W, data_points: &[crate::DataPoint]) -> Result<()> {
     if data_points.is_empty() {
         return Ok(());
     }
@@ -34,12 +20,10 @@ pub fn encode_points<W: Write>(
     writable.write_all(&bytes)
 }
 
-pub struct GorillaDecoder<R: Read> {
-    reader: BufReader<R>,
-}
-
-impl<R: Read> Decoder for GorillaDecoder<R> {
-    fn decode_points(&mut self, n: usize) -> std::io::Result<Vec<crate::DataPoint>> {
-        todo!()
-    }
+pub fn decode_points<R: Read>(
+    readable: R,
+    n: usize,
+    encode_strategy: EncodeStrategy,
+) -> Result<Vec<DataPoint>> {
+    Ok(vec![])
 }

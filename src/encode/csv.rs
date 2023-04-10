@@ -11,7 +11,7 @@ pub fn encode_points<W: Write>(writable: &mut W, data_points: &[DataPoint]) -> R
     Ok(())
 }
 
-fn decode_point<R: Read>(readable: R) -> Result<DataPoint> {
+fn decode_point<R: Read>(readable: &mut BufReader<R>) -> Result<DataPoint> {
     let mut buf = String::new();
     readable.read_line(&mut buf)?;
 
@@ -35,10 +35,10 @@ fn decode_point<R: Read>(readable: R) -> Result<DataPoint> {
 }
 
 pub fn decode_points<R: Read>(readable: R, n: usize) -> Result<Vec<DataPoint>> {
-    let reader = BufReader::new(readable);
+    let mut reader = BufReader::new(readable);
     let mut points: Vec<DataPoint> = Vec::new();
     for _ in 0..n {
-        points.push(decode_point(reader)?);
+        points.push(decode_point(&mut reader)?);
     }
     Ok(points)
 }
@@ -91,7 +91,7 @@ impl Read for FakeFile {
 
 #[cfg(test)]
 pub mod tests {
-    use std::io::Seek;
+    use std::io::{Seek, Write};
 
     use crate::{
         encode::csv::{decode_points, encode_points},
@@ -109,7 +109,7 @@ pub mod tests {
     #[test]
     fn test_encode() {
         let buf = Vec::new();
-        let fake_file = FakeFile::new(buf);
+        let mut fake_file = FakeFile::new(buf);
         encode_points(
             &mut fake_file,
             &[DataPoint {
@@ -125,7 +125,7 @@ pub mod tests {
     #[test]
     fn test_get_offset() {
         let buf = Vec::new();
-        let fake_file = FakeFile::new(buf);
+        let mut fake_file = FakeFile::new(buf);
         encode_points(
             &mut fake_file,
             &[
@@ -141,7 +141,7 @@ pub mod tests {
         )
         .unwrap();
         fake_file.flush().unwrap();
-        assert_eq!(fake_file.get_current_offset().unwrap(), 12); // "123,1\n456,2\n".len()
+        assert_eq!(fake_file.seek(std::io::SeekFrom::Current(0)).unwrap(), 12); // "123,1\n456,2\n".len()
         assert_eq!(fake_file.buf, b"123,1\n456,2\n");
     }
 
@@ -152,7 +152,7 @@ pub mod tests {
             value: 1.0,
         }];
         let buf = Vec::new();
-        let fake_file = FakeFile::new(buf);
+        let mut fake_file = FakeFile::new(buf);
         encode_points(&mut fake_file, data_points).unwrap();
         fake_file.flush().unwrap();
         fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
