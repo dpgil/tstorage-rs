@@ -1,9 +1,6 @@
-use crate::{
-    encode::csv::{CsvDecoder, CsvEncoder},
-    metric::DataPoint,
-};
+use crate::metric::DataPoint;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Result, Seek, Write};
+use std::io::{Read, Result, Write};
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 pub enum EncodeStrategy {
@@ -33,8 +30,13 @@ pub fn encode_points<W: Write>(
     }
 }
 
-pub fn get_decoder<R: Read>(encode_strategy: EncodeStrategy, readable: R) -> impl Decoder {
+pub fn decode_points<R: Read>(
+    readable: R,
+    n: usize,
+    encode_strategy: EncodeStrategy,
+) -> Result<Vec<DataPoint>> {
     match encode_strategy {
-        EncodeStrategy::CSV => CsvDecoder::new(readable),
+        EncodeStrategy::CSV => super::csv::decode_points(readable, n),
+        EncodeStrategy::Gorilla => todo!(),
     }
 }

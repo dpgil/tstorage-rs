@@ -11,7 +11,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    encode::encode::{encode_points, get_decoder, Decoder, EncodeStrategy},
+    encode::encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
     Row,
 };
@@ -66,11 +66,11 @@ impl Partition for DiskPartition {
             .get(name)
             .ok_or(Error::NoDataPointsError)?;
 
-        let mut decoder = get_decoder(
-            self.metadata.encode_strategy,
+        let mut points: Vec<DataPoint> = decode_points(
             &self.mapped_file[meta.start_offset..meta.end_offset],
-        );
-        let mut points: Vec<DataPoint> = decoder.decode_points(meta.num_data_points)?;
+            meta.num_data_points,
+            self.metadata.encode_strategy,
+        )?;
         points.retain(|dp| dp.timestamp >= start && dp.timestamp < end);
         Ok(points)
     }

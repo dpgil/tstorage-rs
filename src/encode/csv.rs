@@ -44,7 +44,7 @@ impl<W: Write + Seek> Encoder for CsvEncoder<W> {
     }
 }
 
-pub struct CsvDecoder<R: Read> {
+struct CsvDecoder<R: Read> {
     reader: BufReader<R>,
 }
 
@@ -79,14 +79,13 @@ impl<R: Read> CsvDecoder<R> {
     }
 }
 
-impl<R: Read> Decoder for CsvDecoder<R> {
-    fn decode_points(&mut self, n: usize) -> Result<Vec<DataPoint>> {
-        let mut points: Vec<DataPoint> = Vec::new();
-        for _ in 0..n {
-            points.push(self.decode_point()?);
-        }
-        Ok(points)
+pub fn decode_points<R: Read>(readable: R, n: usize) -> Result<Vec<DataPoint>> {
+    let mut decoder = CsvDecoder::new(readable);
+    let mut points: Vec<DataPoint> = Vec::new();
+    for _ in 0..n {
+        points.push(decoder.decode_point()?);
     }
+    Ok(points)
 }
 
 #[derive(Debug)]
@@ -140,11 +139,11 @@ pub mod tests {
     use std::io::Seek;
 
     use crate::{
-        encode::encode::{Decoder, Encoder},
+        encode::{csv::decode_points, encode::Encoder},
         metric::DataPoint,
     };
 
-    use super::{CsvDecoder, CsvEncoder, FakeFile};
+    use super::{CsvEncoder, FakeFile};
 
     impl FakeFile {
         fn new(buf: Vec<u8>) -> Self {
@@ -204,8 +203,7 @@ pub mod tests {
         encoder.flush().unwrap();
         let mut fake_file = encoder.writer.into_inner().unwrap();
         fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        let mut decoder = CsvDecoder::new(fake_file);
-        let actual = decoder.decode_points(1).unwrap();
+        let actual = decode_points(fake_file, 1).unwrap();
         assert_eq!(actual, data_points);
     }
 }
