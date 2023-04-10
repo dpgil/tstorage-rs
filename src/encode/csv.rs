@@ -1,8 +1,5 @@
 use crate::metric::DataPoint;
-use std::{
-    cmp::min,
-    io::{BufRead, BufReader, ErrorKind, Read, Result, Seek, Write},
-};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Result, Write};
 
 pub fn encode_points<W: Write>(writable: &mut W, data_points: &[DataPoint]) -> Result<()> {
     for data_point in data_points {
@@ -43,68 +40,17 @@ pub fn decode_points<R: Read>(readable: R, n: usize) -> Result<Vec<DataPoint>> {
     Ok(points)
 }
 
-#[derive(Debug)]
-struct FakeFile {
-    pub buf: Vec<u8>,
-    pos: u64,
-}
-
-impl Seek for FakeFile {
-    fn seek(&mut self, seek_from: std::io::SeekFrom) -> Result<u64> {
-        match seek_from {
-            std::io::SeekFrom::Start(p) => self.pos = p,
-            std::io::SeekFrom::End(p) => {
-                let len: u64 = self.buf.len().try_into().unwrap();
-                let delta: u64 = p.try_into().unwrap();
-                self.pos = len - delta
-            }
-            std::io::SeekFrom::Current(_) => {}
-        }
-        Ok(self.pos)
-    }
-}
-
-impl Write for FakeFile {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let num_bytes: usize = buf.len();
-        self.pos += TryInto::<u64>::try_into(num_bytes).unwrap();
-        self.buf.append(&mut buf.to_vec());
-        Ok(num_bytes)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl Read for FakeFile {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let curr_pos: usize = self.pos.try_into().unwrap();
-        let count = min(buf.len(), self.buf.len() - curr_pos);
-        for i in 0..count {
-            buf[i] = self.buf[curr_pos + i];
-        }
-        self.pos = (curr_pos + count).try_into().unwrap();
-        Ok(count)
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use std::io::{Seek, Write};
 
     use crate::{
-        encode::csv::{decode_points, encode_points},
+        encode::{
+            csv::{decode_points, encode_points},
+            test::fake_file::FakeFile,
+        },
         metric::DataPoint,
     };
-
-    use super::FakeFile;
-
-    impl FakeFile {
-        fn new(buf: Vec<u8>) -> Self {
-            Self { buf, pos: 0 }
-        }
-    }
 
     #[test]
     fn test_encode() {
