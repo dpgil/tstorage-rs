@@ -57,3 +57,29 @@ pub fn decode_points(bytes: &[u8], n: usize) -> Result<Vec<crate::DataPoint>> {
         false => todo!(), // TODO: error
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use std::io::Write;
+
+    use crate::{encode::{test::fake_file::FakeFile, gorilla::{encode_points, decode_points}}, DataPoint};
+
+    #[test]
+    fn test_encode_decode() {
+        let buf = Vec::new();
+        let mut fake_file = FakeFile::new(buf);
+        let expected_points = [DataPoint {
+            timestamp: 123,
+            value: 1.0,
+        }];
+        encode_points(
+            &mut fake_file,
+            &expected_points,
+        )
+        .unwrap();
+        fake_file.flush().unwrap();
+        
+        let actual_points = decode_points(&fake_file.buf, 1).unwrap();
+        assert_eq!(actual_points, expected_points);
+    }
+}

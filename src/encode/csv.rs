@@ -59,6 +59,25 @@ pub mod tests {
     }
 
     #[test]
+    fn test_encode_decode() {
+        let buf = Vec::new();
+        let mut fake_file = FakeFile::new(buf);
+        let expected_points = [DataPoint {
+            timestamp: 123,
+            value: 1.0,
+        }];
+        encode_points(
+            &mut fake_file,
+            &expected_points,
+        )
+        .unwrap();
+        fake_file.flush().unwrap();
+        fake_file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let actual_points = decode_points(fake_file, 1).unwrap();
+        assert_eq!(actual_points, expected_points);
+    }
+
+    #[test]
     fn test_encode() {
         let buf = Vec::new();
         let mut fake_file = FakeFile::new(buf);
