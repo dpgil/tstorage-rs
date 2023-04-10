@@ -9,6 +9,7 @@ use std::io::{Read, Result, Seek, Write};
 pub enum EncodeStrategy {
     #[default]
     CSV,
+    Gorilla,
 }
 
 pub trait Encoder {
@@ -28,6 +29,7 @@ pub fn encode_points<W: Write>(
 ) -> Result<()> {
     match encode_strategy {
         EncodeStrategy::CSV => super::csv::encode_points(writable, data_points),
+        EncodeStrategy::Gorilla => super::gorilla::encode_points(writable, data_points),
     }
 }
 
