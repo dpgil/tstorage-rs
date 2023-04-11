@@ -66,6 +66,10 @@ impl Partition for DiskPartition {
             .metrics
             .get(name)
             .ok_or(Error::NoDataPointsError)?;
+        let meta = match self.metadata.metrics.get(name) {
+            Some(meta) => meta,
+            None => return Ok(vec![]),
+        };
 
         let mut points: Vec<DataPoint> = decode_points(
             &self.mapped_file[meta.start_offset..meta.end_offset],
@@ -239,6 +243,13 @@ pub mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_select_no_data_points() {
+        let dir_path = Path::new("tests/fixtures/test_csv_disk_partition");
+        let partition = open(dir_path).unwrap();
+        assert_eq!(partition.select("random_metric", 11, 100).unwrap(), vec![]);
     }
 
     #[test]
