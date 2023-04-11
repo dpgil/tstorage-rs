@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::{
     encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
+    storage::StoragePartition,
     Row,
 };
 
@@ -124,8 +125,8 @@ pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
     })
 }
 
-pub fn open_all(dir_path: &str) -> Result<Vec<Box<dyn Partition>>, Error> {
-    let mut partitions: Vec<Box<dyn Partition>> = vec![];
+pub fn open_all(dir_path: &str) -> Result<Vec<Box<StoragePartition>>, Error> {
+    let mut partitions: Vec<Box<StoragePartition>> = vec![];
     fs::create_dir_all(dir_path).map_err(|e| Error::FileError(e))?;
     let paths = fs::read_dir(dir_path).map_err(|e| Error::FileError(e))?;
     for path in paths {

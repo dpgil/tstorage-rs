@@ -89,8 +89,10 @@ impl Config {
     }
 }
 
+pub type StoragePartition = dyn Partition + Send + Sync;
+
 pub struct Storage {
-    partitions: Vec<Box<dyn Partition>>,
+    partitions: Vec<Box<StoragePartition>>,
     insert_window: InsertWindow,
     partition_config: PartitionConfig,
     disk_config: DiskConfig,
@@ -120,7 +122,7 @@ impl Storage {
     pub fn new(config: Config) -> Result<Self, StorageError> {
         config.validate()?;
 
-        let partitions: Vec<Box<dyn Partition>> = match config.disk.as_ref() {
+        let partitions: Vec<Box<StoragePartition>> = match config.disk.as_ref() {
             Some(disk_config) => open_all(&disk_config.data_path)?,
             None => vec![],
         };
@@ -161,7 +163,7 @@ impl Storage {
         self.flush_partitions()
     }
 
-    fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
+    pub fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
         let retention_boundary =
             self.partition_config.max_partitions * self.partition_config.duration;
         let retain_after = match self.partitions.last() {
@@ -182,7 +184,7 @@ impl Storage {
         Ok(())
     }
 
-    fn flush_partitions(&mut self) -> Result<(), StorageError> {
+    pub fn flush_partitions(&mut self) -> Result<(), StorageError> {
         self.partitions
             .iter_mut()
             .rev()
