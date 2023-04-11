@@ -1,7 +1,7 @@
 use crate::{
     metric::{DataPoint, Row},
     partition::{
-        disk::{self, open, open_all},
+        disk::{self, flush, open, open_all},
         memory::MemoryPartition,
         Boundary, Partition, PartitionError, PointPartitionOrdering,
     },
@@ -13,6 +13,9 @@ use log::error;
 use std::{
     num::TryFromIntError,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard, RwLock},
+    thread,
+    time::Duration,
 };
 use thiserror::Error;
 
@@ -91,8 +94,31 @@ impl Config {
 
 pub type StoragePartition = dyn Partition + Send + Sync;
 
+struct StorageOuter {
+    inner: Arc<Storage>,
+}
+
+impl StorageOuter {
+    pub fn new(config: Config) -> Result<Self, StorageError> {
+        let storage = Storage::new(config)?;
+        let inner = Arc::new(storage);
+
+        // TODO: naming
+        let my_inner = inner.clone();
+        thread::spawn(move || loop {
+            // TODO: configurable sleep time
+            thread::sleep(Duration::from_secs(1));
+            my_inner.remove_expired_partitions();
+            my_inner.flush_partitions();
+            // TODO: tripwire
+        });
+
+        Ok(Self { inner })
+    }
+}
+
 pub struct Storage {
-    partitions: Vec<Box<StoragePartition>>,
+    partitions: RwLock<Vec<Box<StoragePartition>>>,
     insert_window: InsertWindow,
     partition_config: PartitionConfig,
     disk_config: DiskConfig,
@@ -116,6 +142,10 @@ pub enum StorageError {
     FailedOpen(#[from] disk::Error),
     #[error("failed to clean partition")]
     FailedClean(PartitionError),
+    #[error("failed to get partition lock")]
+    LockFailure,
+    #[error("failed to get data from partition")]
+    FailedSelect,
 }
 
 impl Storage {
@@ -128,19 +158,33 @@ impl Storage {
         };
 
         Ok(Self {
-            partitions,
+            partitions: RwLock::new(partitions),
             insert_window: InsertWindow::new(config.insert_window),
             partition_config: config.partition,
             disk_config: config.disk.unwrap_or_default(),
         })
     }
 
-    pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
-        let mut result = vec![];
-        for partition in &self.partitions {
-            result.append(&mut partition.select(name, start, end)?);
+    pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>, StorageError> {
+        match self.partitions.read() {
+            Ok(partitions) => {
+                let mut result = vec![];
+                // partitions.iter().for_each(|partition| {
+                //     result.append(&mut partition.select(name, start, end)?);
+                // });
+                for partition in partitions.iter() {
+                    let points = &mut partition
+                        .select(name, start, end)
+                        .map_err(|_| StorageError::FailedSelect)?;
+                    result.append(points);
+                }
+                // for partition in partitions {
+                //     result.append(&mut partition.select(name, start, end)?);
+                // }
+                Ok(result)
+            }
+            Err(_) => Err(StorageError::LockFailure),
         }
-        Ok(result)
     }
 
     pub fn insert(&mut self, row: &Row) -> Result<(), StorageError> {
@@ -153,25 +197,50 @@ impl Storage {
     }
 
     fn create_partition_with_row(&mut self, row: &Row) -> Result<(), StorageError> {
-        self.partitions.push(Box::new(MemoryPartition::new(
-            Some(self.partition_config.duration),
-            row,
-        )));
-
-        // TODO: do this asynchronously
-        self.remove_expired_partitions()?;
-        self.flush_partitions()
+        match self.partitions.write() {
+            Ok(mut partitions) => {
+                partitions.push(Box::new(MemoryPartition::new(
+                    Some(self.partition_config.duration),
+                    row,
+                )));
+                Ok(())
+            }
+            Err(e) => Err(StorageError::LockFailure),
+        }
     }
 
     pub fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
+        let to_remove: Vec<&Box<StoragePartition>> = match self.partitions.read() {
+            Ok(partitions) => {
+                let retention_boundary =
+                    self.partition_config.max_partitions * self.partition_config.duration;
+                let retain_after = match partitions.last() {
+                    Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
+                    None => Err(StorageError::EmptyPartitionList),
+                }?;
+                let to_remove = vec![];
+                partitions.iter().for_each(|p| {
+                    to_remove.push(p);
+                });
+                Ok(to_remove)
+            }
+            Err(_) => Err(StorageError::LockFailure),
+        }?;
+        Ok(())
+    }
+
+    fn remove_expired_partitions_inner(
+        &self,
+        partitions: MutexGuard<Vec<Box<StoragePartition>>>,
+    ) -> Result<(), StorageError> {
         let retention_boundary =
             self.partition_config.max_partitions * self.partition_config.duration;
-        let retain_after = match self.partitions.last() {
+        let retain_after = match partitions.last() {
             Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
             None => Err(StorageError::EmptyPartitionList),
         }?;
 
-        self.partitions.retain(|p| {
+        partitions.retain(|p| {
             if p.boundary().max_timestamp() > retain_after {
                 return true;
             }
@@ -181,11 +250,22 @@ impl Storage {
             // to clean over and over.
             p.clean().is_err()
         });
+
         Ok(())
     }
 
     pub fn flush_partitions(&mut self) -> Result<(), StorageError> {
-        self.partitions
+        match self.partitions.lock() {
+            Ok(partitions) => self.flush_partitions_inner(partitions),
+            Err(_) => todo!(),
+        }
+    }
+
+    fn flush_partitions_inner(
+        &mut self,
+        partitions: MutexGuard<Vec<Box<StoragePartition>>>,
+    ) -> Result<(), StorageError> {
+        partitions
             .iter_mut()
             .rev()
             .enumerate()
