@@ -169,18 +169,12 @@ impl Storage {
         match self.partitions.read() {
             Ok(partitions) => {
                 let mut result = vec![];
-                // partitions.iter().for_each(|partition| {
-                //     result.append(&mut partition.select(name, start, end)?);
-                // });
                 for partition in partitions.iter() {
                     let points = &mut partition
                         .select(name, start, end)
                         .map_err(|_| StorageError::FailedSelect)?;
                     result.append(points);
                 }
-                // for partition in partitions {
-                //     result.append(&mut partition.select(name, start, end)?);
-                // }
                 Ok(result)
             }
             Err(_) => Err(StorageError::LockFailure),
@@ -210,7 +204,8 @@ impl Storage {
     }
 
     pub fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
-        let to_remove: Vec<&Box<StoragePartition>> = match self.partitions.read() {
+        // Grab the read lock to figure out which partitions are expired.
+        let partitions_to_remove: Vec<&Box<StoragePartition>> = match self.partitions.read() {
             Ok(partitions) => {
                 let retention_boundary =
                     self.partition_config.max_partitions * self.partition_config.duration;
@@ -226,6 +221,53 @@ impl Storage {
             }
             Err(_) => Err(StorageError::LockFailure),
         }?;
+
+        // Flush the partitions without holding onto any lock.
+        let partitions_to_swap: Vec<Box<StoragePartition>> =
+            Vec::with_capacity(partitions_to_remove.len());
+        for p in partitions_to_remove {
+            let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
+            if let Err(e) = p.flush(&dir_path, self.disk_config.encode_strategy) {
+                match e {
+                    // Unflushable partitions are expected not to be flushed.
+                    // This prevents disk partitions from being flushed more than once.
+                    PartitionError::Unflushable => {}
+                    // TODO:improvement: do we want to bail here? This means one corrupt partition
+                    // will prevent all future partitions from ever being flushed. We could instead
+                    // flush as much as possible and return the errors at the end.
+                    _ => return Err(StorageError::FailedFlush(e)),
+                };
+            }
+
+            match open(&dir_path) {
+                Ok(disk_partition) => {
+                    // Swap the partition with a disk partition.
+                    let x = Box::new(disk_partition);
+                    // partitions_to_swap.push(Box::new(disk_partition));
+                }
+                Err(e) => {
+                    // TODO:improvement: same comment as above about bailing here.
+                    return Err(StorageError::FailedOpen(e));
+                }
+            }
+        }
+
+        // Swap the in memory partitions with the flushed partitions.
+        //
+        // IMPORTANT: We can do this after not having the lock because
+        // this is the only place that touches the tail of the partition list.
+        // The only other place in the code that modifies the partitions list
+        // only adds new partitions to the head and nothing else, so we can
+        // safely assume nothing has changed in the list at this point.
+        match self.partitions.write() {
+            Ok(partitions) => {
+                partitions.iter_mut().enumerate().for_each(|(i, p)| {
+                    *p = partitions_to_swap[i];
+                });
+            }
+            Err(_) => return Err(StorageError::LockFailure),
+        };
+
         Ok(())
     }
 
