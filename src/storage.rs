@@ -14,7 +14,7 @@ use log::error;
 use std::{
     num::TryFromIntError,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard},
     thread,
     time::Duration,
 };
@@ -209,7 +209,7 @@ impl Storage {
         // Grab the read lock to figure out which partitions need to be flushed.
         let partitions_to_flush: Vec<&Box<StoragePartition>> = match self.partitions.read() {
             Ok(partitions) => {
-                let to_flush = vec![];
+                let mut to_flush = vec![];
                 partitions.iter().enumerate().for_each(|(i, p)| {
                     if (partitions.len() - i) <= self.partition_config.hot_partitions {
                         // Hot partitions are not flushed.
@@ -229,7 +229,7 @@ impl Storage {
             .into_iter()
             .map(|p| {
                 let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
-                if let Err(e) = p.flush(&dir_path, self.disk_config.encode_strategy) {
+                if let Err(_) = p.flush(&dir_path, self.disk_config.encode_strategy) {
                     // TODO:improvement: handle flush problems here, log them at the very least.
                     // If partitions repeatedly have issues flushing, we'll take up more and more
                     // memory with partitions that are supposed to be on disk.
@@ -242,7 +242,7 @@ impl Storage {
                     Ok(disk_partition) => Some(Box::new(disk_partition)),
                     // TODO:improvement: same note about flush issues here. If we don't handle this error,
                     // we could possibly be re-flushing the same partition multiple times.
-                    Err(e) => None,
+                    Err(_) => None,
                 }
             })
             .collect();
@@ -254,7 +254,7 @@ impl Storage {
         // The only other place in the code that modifies the partitions list
         // only adds new partitions to the head and nothing else, so we can
         // safely assume nothing has changed in the list at this point.
-        match self.partitions.write() {
+        match self.partitions.write().as_mut() {
             Ok(partitions) => {
                 partitions_to_swap
                     .into_iter()
@@ -270,31 +270,6 @@ impl Storage {
         Ok(())
     }
 
-    // fn remove_expired_partitions_inner(
-    //     &self,
-    //     partitions: MutexGuard<PartitionList>,
-    // ) -> Result<(), StorageError> {
-    //     let retention_boundary =
-    //         self.partition_config.max_partitions * self.partition_config.duration;
-    //     let retain_after = match partitions.last() {
-    //         Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
-    //         None => Err(StorageError::EmptyPartitionList),
-    //     }?;
-
-    //     partitions.retain(|p| {
-    //         if p.boundary().max_timestamp() > retain_after {
-    //             return true;
-    //         }
-    //         // Expired partition, attempt to remove it. Keep the partition only
-    //         // if the clean failed, so we retry later on instead of leaking.
-    //         // TODO: propagate clean failures instead of silently attempting
-    //         // to clean over and over.
-    //         p.clean().is_err()
-    //     });
-
-    //     Ok(())
-    // }
-
     pub fn remove_expired_partitions(&mut self) -> Result<(), StorageError> {
         // Grab the read lock to figure out which partitions are expired.
         let partitions_to_remove: Vec<&Box<StoragePartition>> = match self.partitions.read() {
@@ -305,7 +280,7 @@ impl Storage {
                     Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
                     None => Err(StorageError::EmptyPartitionList),
                 }?;
-                let to_remove = vec![];
+                let mut to_remove = vec![];
                 partitions.iter().for_each(|p| {
                     if p.boundary().max_timestamp() <= remove_before {
                         to_remove.push(p);
@@ -327,9 +302,9 @@ impl Storage {
 
         // Remove all the successfully cleaned partitions from the partition list.
         match self.partitions.write() {
-            Ok(partitions) => {
-                let new_partitions = partitions
-                    .iter()
+            Ok(mut partitions) => {
+                let new_partitions: PartitionList = std::mem::take(&mut *partitions)
+                    .into_iter()
                     .enumerate()
                     .map(|(i, p)| {
                         match remove_result.get(i) {
@@ -342,17 +317,20 @@ impl Storage {
                     })
                     .filter(|p| p.is_some())
                     .map(|p| p.unwrap())
-                    .map(|p| *p)
                     .collect();
-                *partitions = new_partitions;
+                std::mem::replace(&mut *partitions, new_partitions);
                 Ok(())
             }
             Err(_) => return Err(StorageError::LockFailure),
         }
     }
 
-    fn cascade_past_insert(&self, row: &Row) -> Result<(), StorageError> {
-        match self.partitions.split_last() {
+    fn cascade_past_insert(
+        &self,
+        row: &Row,
+        partitions: RwLockWriteGuard<PartitionList>,
+    ) -> Result<(), StorageError> {
+        match partitions.split_last() {
             Some((_, past_partitions)) => {
                 let mut iter = past_partitions.iter().rev();
                 let mut i = 1;
@@ -390,7 +368,7 @@ impl Storage {
                         p.insert(row).map_err(StorageError::FailedInsert)
                     }
                     PointPartitionOrdering::Future => self.create_partition_with_row(row),
-                    PointPartitionOrdering::Past => self.cascade_past_insert(row),
+                    PointPartitionOrdering::Past => self.cascade_past_insert(row, partitions),
                 },
                 None => self.create_partition_with_row(row),
             },
