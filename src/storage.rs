@@ -93,6 +93,7 @@ impl Config {
 }
 
 pub type StoragePartition = dyn Partition + Send + Sync;
+pub type PartitionList = Vec<Box<StoragePartition>>;
 
 struct StorageOuter {
     inner: Arc<Storage>,
@@ -118,7 +119,7 @@ impl StorageOuter {
 }
 
 pub struct Storage {
-    partitions: RwLock<Vec<Box<StoragePartition>>>,
+    partitions: RwLock<PartitionList>,
     insert_window: InsertWindow,
     partition_config: PartitionConfig,
     disk_config: DiskConfig,
@@ -152,7 +153,7 @@ impl Storage {
     pub fn new(config: Config) -> Result<Self, StorageError> {
         config.validate()?;
 
-        let partitions: Vec<Box<StoragePartition>> = match config.disk.as_ref() {
+        let partitions: PartitionList = match config.disk.as_ref() {
             Some(disk_config) => open_all(&disk_config.data_path)?,
             None => vec![],
         };
@@ -223,8 +224,7 @@ impl Storage {
         }?;
 
         // Flush the partitions without holding onto any lock.
-        let partitions_to_swap: Vec<Box<StoragePartition>> =
-            Vec::with_capacity(partitions_to_remove.len());
+        let partitions_to_swap: PartitionList = Vec::with_capacity(partitions_to_remove.len());
         for p in partitions_to_remove {
             let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
             if let Err(e) = p.flush(&dir_path, self.disk_config.encode_strategy) {
@@ -273,7 +273,7 @@ impl Storage {
 
     fn remove_expired_partitions_inner(
         &self,
-        partitions: MutexGuard<Vec<Box<StoragePartition>>>,
+        partitions: MutexGuard<PartitionList>,
     ) -> Result<(), StorageError> {
         let retention_boundary =
             self.partition_config.max_partitions * self.partition_config.duration;
@@ -305,7 +305,7 @@ impl Storage {
 
     fn flush_partitions_inner(
         &mut self,
-        partitions: MutexGuard<Vec<Box<StoragePartition>>>,
+        partitions: MutexGuard<PartitionList>,
     ) -> Result<(), StorageError> {
         partitions
             .iter_mut()
@@ -372,15 +372,18 @@ impl Storage {
     }
 
     fn insert_row(&mut self, row: &Row) -> Result<(), StorageError> {
-        match self.partitions.last() {
-            Some(p) => match p.ordering(row) {
-                PointPartitionOrdering::Current => {
-                    p.insert(row).map_err(StorageError::FailedInsert)
-                }
-                PointPartitionOrdering::Future => self.create_partition_with_row(row),
-                PointPartitionOrdering::Past => self.cascade_past_insert(row),
+        match self.partitions.write() {
+            Ok(partitions) => match partitions.last() {
+                Some(p) => match p.ordering(row) {
+                    PointPartitionOrdering::Current => {
+                        p.insert(row).map_err(StorageError::FailedInsert)
+                    }
+                    PointPartitionOrdering::Future => self.create_partition_with_row(row),
+                    PointPartitionOrdering::Past => self.cascade_past_insert(row),
+                },
+                None => self.create_partition_with_row(row),
             },
-            None => self.create_partition_with_row(row),
+            Err(_) => Err(StorageError::LockFailure),
         }
     }
 }
