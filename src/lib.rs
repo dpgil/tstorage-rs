@@ -1,5 +1,5 @@
 pub mod storage;
-pub use encode::encode::EncodeStrategy;
+pub use encode::EncodeStrategy;
 pub use metric::{DataPoint, Row};
 
 mod encode;

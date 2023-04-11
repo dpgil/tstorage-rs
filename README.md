@@ -54,7 +54,7 @@ The main settings that can be configured in the database are the partition size,
 - ~~Support out-of-order data points~~
 - ~~Support benchmarks~~
 - ~~Support disk partitions~~
-- Support Gorilla compression in disk partitions
+- ~~Support Gorilla compression in disk partitions~~
 - Support WAL
 - Support metric labels
 - Support timestamp precision

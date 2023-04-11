@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{self, BufReader, Write},
+    io::{self, BufReader, BufWriter, Seek, Write},
     path::{Path, PathBuf},
 };
 use thiserror::Error;
 
 use crate::{
-    encode::encode::{get_decoder, get_encoder, Decoder, EncodeStrategy, Encoder},
+    encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
     Row,
 };
@@ -66,22 +66,12 @@ impl Partition for DiskPartition {
             .get(name)
             .ok_or(Error::NoDataPointsError)?;
 
-        let mut decoder = get_decoder(
-            self.metadata.encode_strategy,
+        let mut points: Vec<DataPoint> = decode_points(
             &self.mapped_file[meta.start_offset..meta.end_offset],
-        );
-
-        let mut points: Vec<DataPoint> = Vec::with_capacity(meta.num_data_points);
-        for _ in 0..meta.num_data_points {
-            let data_point = decoder.decode_point()?;
-            if data_point.timestamp < start {
-                continue;
-            }
-            if data_point.timestamp >= end {
-                break;
-            }
-            points.push(data_point);
-        }
+            meta.num_data_points,
+            self.metadata.encode_strategy,
+        )?;
+        points.retain(|dp| dp.timestamp >= start && dp.timestamp < end);
         Ok(points)
     }
 
@@ -158,7 +148,7 @@ pub fn flush(
 
     let data_file_path = Path::new(&dir_path).join(DATA_FILE_NAME);
     let data = File::create(data_file_path)?;
-    let mut encoder = get_encoder(encode_strategy, data);
+    let mut writer = BufWriter::new(data);
     let mut metrics = HashMap::<String, MetricMetadata>::new();
     let mut total_data_points = 0;
     let min_timestamp = partition.min_timestamp();
@@ -167,11 +157,9 @@ pub fn flush(
         let (name, metric_entry) = x.pair();
         // Find the current offset in the file, since we don't know how much
         // the encoder moved the pointer.
-        let start_offset = encoder.get_current_offset().unwrap();
-        for data_point in metric_entry.data_points.iter() {
-            encoder.encode_point(data_point)?;
-        }
-        let end_offset = encoder.get_current_offset().unwrap();
+        let start_offset = writer.seek(std::io::SeekFrom::Current(0)).unwrap();
+        encode_points(&mut writer, &metric_entry.data_points, encode_strategy)?;
+        let end_offset = writer.seek(std::io::SeekFrom::Current(0)).unwrap();
         let num_data_points = metric_entry.data_points.len();
         total_data_points += num_data_points;
         metrics.insert(
@@ -188,7 +176,7 @@ pub fn flush(
             },
         );
     }
-    encoder.flush()?;
+    writer.flush()?;
 
     let partition_metadata = PartitionMetadata {
         boundary: Boundary {
@@ -212,7 +200,7 @@ pub mod tests {
     use std::{fs, path::Path};
 
     use crate::{
-        encode::encode::EncodeStrategy,
+        encode::EncodeStrategy,
         metric::{DataPoint, Row},
         partition::{
             disk::{flush, PartitionMetadata, DATA_FILE_NAME, META_FILE_NAME},
