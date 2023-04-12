@@ -169,8 +169,18 @@ impl Storage {
     pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>, StorageError> {
         match self.partitions.read() {
             Ok(partitions) => {
+                let retention_boundary =
+                    self.partition_config.max_partitions * self.partition_config.duration;
+                let expired_before = match partitions.last() {
+                    Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
+                    None => Err(StorageError::EmptyPartitionList),
+                }?;
+
                 let mut result = vec![];
                 for partition in partitions.iter() {
+                    if partition.boundary().max_timestamp() <= expired_before {
+                        continue;
+                    }
                     let points = &mut partition
                         .select(name, start, end)
                         .map_err(|_| StorageError::FailedSelect)?;
