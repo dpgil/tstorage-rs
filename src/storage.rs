@@ -193,15 +193,14 @@ impl Storage {
     }
 
     fn create_partition_with_row(
-        &mut self,
+        &self,
         row: &Row,
         partitions: &mut RwLockWriteGuard<PartitionList>,
     ) -> Result<(), StorageError> {
-        partitions.push(Box::new(MemoryPartition::new(
+        Ok(partitions.push(Box::new(MemoryPartition::new(
             Some(self.partition_config.duration),
             row,
-        )));
-        Ok(())
+        ))))
     }
 
     pub fn flush_partitions(&self) -> Result<(), StorageError> {
@@ -303,7 +302,7 @@ impl Storage {
                     .filter(|p| p.is_some())
                     .map(|p| p.unwrap())
                     .collect();
-                std::mem::replace(&mut *partitions, new_partitions);
+                *partitions = new_partitions;
                 Ok(())
             }
             Err(_) => return Err(StorageError::LockFailure),
