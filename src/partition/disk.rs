@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::{
     encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
+    storage::PartitionList,
     Row,
 };
 
@@ -60,11 +61,10 @@ pub struct DiskPartition {
 
 impl Partition for DiskPartition {
     fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
-        let meta = self
-            .metadata
-            .metrics
-            .get(name)
-            .ok_or(Error::NoDataPointsError)?;
+        let meta = match self.metadata.metrics.get(name) {
+            Some(meta) => meta,
+            None => return Ok(vec![]),
+        };
 
         let mut points: Vec<DataPoint> = decode_points(
             &self.mapped_file[meta.start_offset..meta.end_offset],
@@ -124,8 +124,8 @@ pub fn open(dir_path: &Path) -> Result<DiskPartition, Error> {
     })
 }
 
-pub fn open_all(dir_path: &str) -> Result<Vec<Box<dyn Partition>>, Error> {
-    let mut partitions: Vec<Box<dyn Partition>> = vec![];
+pub fn open_all(dir_path: &str) -> Result<PartitionList, Error> {
+    let mut partitions: PartitionList = vec![];
     fs::create_dir_all(dir_path).map_err(|e| Error::FileError(e))?;
     let paths = fs::read_dir(dir_path).map_err(|e| Error::FileError(e))?;
     for path in paths {
@@ -238,6 +238,13 @@ pub mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_select_no_data_points() {
+        let dir_path = Path::new("tests/fixtures/test_csv_disk_partition");
+        let partition = open(dir_path).unwrap();
+        assert_eq!(partition.select("random_metric", 11, 100).unwrap(), vec![]);
     }
 
     #[test]
