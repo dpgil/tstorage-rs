@@ -1,8 +1,7 @@
 use crate::{
     metric::{DataPoint, Row},
     partition::{
-        self,
-        disk::{self, flush, open, open_all, DiskPartition},
+        disk::{self, open, open_all, DiskPartition},
         memory::MemoryPartition,
         Boundary, Partition, PartitionError, PointPartitionOrdering,
     },
@@ -14,7 +13,7 @@ use log::error;
 use std::{
     num::TryFromIntError,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, RwLock, RwLockWriteGuard},
+    sync::{Arc, RwLock, RwLockWriteGuard},
     thread,
     time::Duration,
 };
@@ -433,7 +432,7 @@ pub mod tests {
         for data_point in data_points {
             storage.insert(&Row { metric, data_point }).unwrap();
         }
-        assert_eq!(storage.partitions.len(), 3);
+        assert_eq!(storage.partitions.read().unwrap().len(), 3);
 
         let result = storage.select(&metric.to_string(), 0, 7).unwrap();
         assert_eq!(result, data_points);
@@ -813,7 +812,7 @@ pub mod tests {
         })
         .unwrap();
 
-        assert_eq!(storage.partitions.len(), 2);
+        assert_eq!(storage.partitions.read().unwrap().len(), 2);
 
         let result = storage.select("metric1", 0, 300).unwrap();
         assert_eq!(result.len(), 6);

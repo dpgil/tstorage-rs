@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     encode::{decode_points, encode_points, EncodeStrategy},
     metric::DataPoint,
-    storage::{PartitionList, StoragePartition},
+    storage::PartitionList,
     Row,
 };
 
@@ -61,11 +61,6 @@ pub struct DiskPartition {
 
 impl Partition for DiskPartition {
     fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>> {
-        let meta = self
-            .metadata
-            .metrics
-            .get(name)
-            .ok_or(Error::NoDataPointsError)?;
         let meta = match self.metadata.metrics.get(name) {
             Some(meta) => meta,
             None => return Ok(vec![]),
