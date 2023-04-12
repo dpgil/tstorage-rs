@@ -192,63 +192,50 @@ impl Storage {
         Ok(())
     }
 
-    fn create_partition_with_row(&mut self, row: &Row) -> Result<(), StorageError> {
-        match self.partitions.write() {
-            Ok(mut partitions) => {
-                partitions.push(Box::new(MemoryPartition::new(
-                    Some(self.partition_config.duration),
-                    row,
-                )));
-                Ok(())
-            }
-            Err(e) => Err(StorageError::LockFailure),
-        }
+    fn create_partition_with_row(
+        &mut self,
+        row: &Row,
+        partitions: &mut RwLockWriteGuard<PartitionList>,
+    ) -> Result<(), StorageError> {
+        partitions.push(Box::new(MemoryPartition::new(
+            Some(self.partition_config.duration),
+            row,
+        )));
+        Ok(())
     }
 
     pub fn flush_partitions(&self) -> Result<(), StorageError> {
         // Grab the read lock to figure out which partitions need to be flushed.
-        let partitions_to_flush: Vec<&Box<StoragePartition>> = match self.partitions.read() {
+        let partitions_to_swap: Vec<Option<Box<DiskPartition>>> = match self.partitions.read() {
             Ok(partitions) => {
-                let mut to_flush = vec![];
-                for (i, x) in partitions.iter().enumerate() {
-                    to_flush.push(x.clone());
-                }
-                // partitions.iter().enumerate().for_each(|(i, p)| {
-                //     if (partitions.len() - i) <= self.partition_config.hot_partitions {
-                //         // Hot partitions are not flushed.
-                //         return;
-                //     }
-                //     to_flush.push(p);
-                // });
-                Ok(to_flush)
+                Ok(partitions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        if (partitions.len() - i) <= self.partition_config.hot_partitions {
+                            // Hot partitions are not flushed.
+                            return None;
+                        }
+                        let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
+                        if let Err(_) = p.flush(&dir_path, self.disk_config.encode_strategy) {
+                            // TODO:improvement: handle flush problems here, log them at the very least.
+                            // If partitions repeatedly have issues flushing, we'll take up more and more
+                            // memory with partitions that are supposed to be on disk.
+                            // Make sure to ignore "Unflushable" errors, as those typically mean the partition
+                            // is already flushed.
+                            return None;
+                        }
+                        match open(&dir_path) {
+                            Ok(disk_partition) => Some(Box::new(disk_partition)),
+                            // TODO:improvement: same note about flush issues here. If we don't handle this error,
+                            // we could possibly be re-flushing the same partition multiple times.
+                            Err(_) => None,
+                        }
+                    })
+                    .collect())
             }
             Err(_) => Err(StorageError::LockFailure),
         }?;
-
-        // Flush the partitions without holding onto any lock.
-        // This is the expensive part of the flushing process, we don't want it to
-        // interfere with selecting points.
-        let partitions_to_swap: Vec<Option<Box<DiskPartition>>> = partitions_to_flush
-            .into_iter()
-            .map(|p| {
-                let dir_path = get_dir_path(&self.disk_config.data_path, p.boundary());
-                if let Err(_) = p.flush(&dir_path, self.disk_config.encode_strategy) {
-                    // TODO:improvement: handle flush problems here, log them at the very least.
-                    // If partitions repeatedly have issues flushing, we'll take up more and more
-                    // memory with partitions that are supposed to be on disk.
-                    // Make sure to ignore "Unflushable" errors, as those typically mean the partition
-                    // is already flushed.
-                    return None;
-                }
-
-                match open(&dir_path) {
-                    Ok(disk_partition) => Some(Box::new(disk_partition)),
-                    // TODO:improvement: same note about flush issues here. If we don't handle this error,
-                    // we could possibly be re-flushing the same partition multiple times.
-                    Err(_) => None,
-                }
-            })
-            .collect();
 
         // Swap the in memory partitions with the flushed partitions.
         //
@@ -326,7 +313,7 @@ impl Storage {
     fn cascade_past_insert(
         &self,
         row: &Row,
-        partitions: RwLockWriteGuard<PartitionList>,
+        partitions: &mut RwLockWriteGuard<PartitionList>,
     ) -> Result<(), StorageError> {
         match partitions.split_last() {
             Some((_, past_partitions)) => {
@@ -359,16 +346,18 @@ impl Storage {
     }
 
     fn insert_row(&mut self, row: &Row) -> Result<(), StorageError> {
-        match self.partitions.write() {
+        match self.partitions.write().as_mut() {
             Ok(partitions) => match partitions.last() {
                 Some(p) => match p.ordering(row) {
                     PointPartitionOrdering::Current => {
                         p.insert(row).map_err(StorageError::FailedInsert)
                     }
-                    PointPartitionOrdering::Future => self.create_partition_with_row(row),
+                    PointPartitionOrdering::Future => {
+                        self.create_partition_with_row(row, partitions)
+                    }
                     PointPartitionOrdering::Past => self.cascade_past_insert(row, partitions),
                 },
-                None => self.create_partition_with_row(row),
+                None => self.create_partition_with_row(row, partitions),
             },
             Err(_) => Err(StorageError::LockFailure),
         }
