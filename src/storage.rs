@@ -13,7 +13,8 @@ use log::error;
 use std::{
     num::TryFromIntError,
     path::{Path, PathBuf},
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::Duration,
 };
 use thiserror::Error;
 
@@ -28,6 +29,7 @@ pub struct Config {
     // An insert_window of 0 means out-of-order inserts are not
     // allowed.
     pub insert_window: i64,
+    pub flush_interval: Option<u64>,
 }
 
 #[derive(Default)]
@@ -85,13 +87,6 @@ impl Config {
 pub type StoragePartition = dyn Partition + Send + Sync;
 pub type PartitionList = Vec<Box<StoragePartition>>;
 
-pub struct Storage {
-    partitions: RwLock<PartitionList>,
-    insert_window: InsertWindow,
-    partition_config: PartitionConfig,
-    disk_config: DiskConfig,
-}
-
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("error validating config")]
@@ -116,7 +111,60 @@ pub enum StorageError {
     FailedSelect,
 }
 
+pub struct Storage {
+    inner: Arc<StorageInner>,
+}
+
 impl Storage {
+    pub fn new(config: Config) -> Result<Self, StorageError> {
+        let oflush_interval = config.flush_interval;
+
+        let storage = StorageInner::new(config)?;
+        let inner = Arc::new(storage);
+
+        if let Some(flush_interval) = oflush_interval {
+            let inner_clone = inner.clone();
+            // TODO: add tripwire
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(flush_interval));
+                    // TODO: add timeouts
+                    if let Err(e) = inner_clone.remove_expired_partitions() {
+                        error!("error removing expired partitions: {}", e);
+                    }
+                    if let Err(e) = inner_clone.flush_partitions() {
+                        error!("error flushing partitions: {}", e);
+                    }
+                }
+            });
+        }
+
+        Ok(Self { inner })
+    }
+
+    pub fn insert(&self, row: &Row) -> Result<(), StorageError> {
+        self.inner.insert(row)
+    }
+
+    pub fn select(&self, name: &str, start: i64, end: i64) -> Result<Vec<DataPoint>, StorageError> {
+        self.inner.select(name, start, end)
+    }
+
+    pub fn close(&self) -> Result<(), StorageError> {
+        self.inner.remove_expired_partitions()?;
+        // TODO: flush everything
+        self.inner.flush_partitions()
+    }
+}
+
+struct StorageInner {
+    partitions: RwLock<PartitionList>,
+    insert_window: InsertWindow,
+    partition_config: PartitionConfig,
+    disk_config: DiskConfig,
+}
+
+impl StorageInner {
     pub fn new(config: Config) -> Result<Self, StorageError> {
         config.validate()?;
 
@@ -162,7 +210,7 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn insert(&mut self, row: &Row) -> Result<(), StorageError> {
+    pub fn insert(&self, row: &Row) -> Result<(), StorageError> {
         if !self.insert_window.contains(row.data_point.timestamp) {
             return Err(StorageError::OutOfBounds);
         }
@@ -171,7 +219,7 @@ impl Storage {
         Ok(())
     }
 
-    fn insert_row(&mut self, row: &Row) -> Result<(), StorageError> {
+    fn insert_row(&self, row: &Row) -> Result<(), StorageError> {
         match self.partitions.write().as_mut() {
             Ok(partitions) => self.insert_row_inner(partitions, row),
             Err(_) => Err(StorageError::LockFailure),
@@ -373,11 +421,11 @@ pub mod tests {
         storage::{ConfigError, DiskConfig, PartitionConfig, StorageError},
     };
 
-    use super::{Config, Storage};
+    use super::{Config, StorageInner};
 
     #[test]
     fn test_storage_insert_multiple_partitions() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 2,
                 hot_partitions: 3,
@@ -434,7 +482,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_insert_window() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 100,
                 hot_partitions: 2,
@@ -497,7 +545,7 @@ pub mod tests {
     // Not my favorite solution but before we have more partitions, we drop
     // any delayed timestamps.
     fn test_storage_martian_point() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 100,
                 hot_partitions: 2,
@@ -547,7 +595,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_insert_window_across_partitions() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 2,
                 hot_partitions: 2,
@@ -593,7 +641,7 @@ pub mod tests {
     #[test]
     fn test_storage_memory_and_disk_partitions() {
         let data_path = String::from("./test_storage_memory_and_disk_partitions");
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 10,
                 hot_partitions: 2,
@@ -651,7 +699,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_retention() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 10,
                 hot_partitions: 1,
@@ -702,7 +750,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_invalid_config() {
-        let storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 10,
                 hot_partitions: 2,
@@ -771,7 +819,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_docs_example() {
-        let mut storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 100,
                 hot_partitions: 2,
@@ -800,7 +848,7 @@ pub mod tests {
 
     #[test]
     fn test_storage_with_existing_partitions() {
-        let storage = Storage::new(Config {
+        let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 10,
                 hot_partitions: 2,

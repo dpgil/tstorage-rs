@@ -10,7 +10,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("insert", |b| {
         b.iter(|| {
             let data_path = String::from("./test_bench_data");
-            let mut storage = Storage::new(Config {
+            let storage = Storage::new(Config {
                 partition: PartitionConfig {
                     duration: 10000,
                     hot_partitions: 2,
@@ -21,6 +21,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     encode_strategy: EncodeStrategy::CSV,
                 }),
                 insert_window: 100,
+                flush_interval: None,
             })
             .unwrap();
             let num_metrics = 100_000;
@@ -45,7 +46,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("select", |b| {
         let data_path = String::from("./test_bench_data");
-        let mut storage = Storage::new(Config {
+        let storage = Storage::new(Config {
             partition: PartitionConfig {
                 duration: 1_000,
                 hot_partitions: 2,
@@ -56,6 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 encode_strategy: EncodeStrategy::CSV,
             }),
             insert_window: 100,
+            flush_interval: None,
         })
         .unwrap();
         let num_metrics = 10_000;
