@@ -29,7 +29,7 @@ pub struct Config {
     // An insert_window of 0 means out-of-order inserts are not
     // allowed.
     pub insert_window: i64,
-    pub flush_interval: Option<u64>,
+    pub sweep_interval: Option<u64>,
 }
 
 #[derive(Default)]
@@ -117,17 +117,17 @@ pub struct Storage {
 
 impl Storage {
     pub fn new(config: Config) -> Result<Self, StorageError> {
-        let oflush_interval = config.flush_interval;
+        let osweep_interval = config.sweep_interval;
 
         let storage = StorageInner::new(config)?;
         let inner = Arc::new(storage);
 
-        if let Some(flush_interval) = oflush_interval {
+        if let Some(sweep_interval) = osweep_interval {
             let inner_clone = inner.clone();
             // TODO: add tripwire
             std::thread::spawn(move || {
                 loop {
-                    std::thread::sleep(Duration::from_secs(flush_interval));
+                    std::thread::sleep(Duration::from_secs(sweep_interval));
                     // TODO: add timeouts
                     if let Err(e) = inner_clone.remove_expired_partitions() {
                         error!("error removing expired partitions: {}", e);

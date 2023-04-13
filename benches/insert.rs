@@ -21,7 +21,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     encode_strategy: EncodeStrategy::CSV,
                 }),
                 insert_window: 100,
-                flush_interval: None,
+                sweep_interval: None,
             })
             .unwrap();
             let num_metrics = 100_000;
@@ -57,7 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 encode_strategy: EncodeStrategy::CSV,
             }),
             insert_window: 100,
-            flush_interval: None,
+            sweep_interval: None,
         })
         .unwrap();
         let num_metrics = 10_000;

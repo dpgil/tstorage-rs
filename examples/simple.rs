@@ -18,7 +18,7 @@ fn main() -> Result<(), StorageError> {
             encode_strategy: rstorage::EncodeStrategy::Gorilla,
         }),
         insert_window: 200,
-        flush_interval: Some(1),
+        sweep_interval: Some(1),
     })?;
 
     let batch_size = 500;
