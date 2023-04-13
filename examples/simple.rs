@@ -17,8 +17,8 @@ fn main() -> Result<(), StorageError> {
             data_path: data_path.clone(),
             encode_strategy: rstorage::EncodeStrategy::Gorilla,
         }),
-        insert_window: 200,
         sweep_interval: Some(1),
+        ..Default::default()
     })?;
 
     let batch_size = 500;

@@ -5,7 +5,7 @@ use crate::{
         memory::MemoryPartition,
         Boundary, Partition, PartitionError, PointPartitionOrdering,
     },
-    window::InsertWindow,
+    window::{Bounds, InsertWindow},
     EncodeStrategy,
 };
 use anyhow::Result;
@@ -22,13 +22,8 @@ use thiserror::Error;
 pub struct Config {
     pub partition: PartitionConfig,
     pub disk: Option<DiskConfig>,
-    // Tolerance for inserting out-of-order data points.
-    // Given the last data point inserted with timestamp t,
-    // the insert window will allow a data point with a timestamp
-    // in the past up to t - insert_window.
-    // An insert_window of 0 means out-of-order inserts are not
-    // allowed.
-    pub insert_window: i64,
+    // Insert window relative to the maximum timestamp in the database.
+    pub insert_bounds: Option<Bounds>,
     pub sweep_interval: Option<u64>,
 }
 
@@ -53,16 +48,18 @@ pub struct DiskConfig {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ConfigError {
-    #[error("insert window is larger than writable window")]
-    InsertWindowError,
     #[error("hot_partitions is greater than max_partitions")]
     NumPartitionsError,
     #[error("error converting hot_partitions to i64")]
     HotPartitionsFormatError(TryFromIntError),
+    #[error("insert window is larger than writable window")]
+    InsertWindowError,
     #[error("hot partitions must be greater than zero to support writing data")]
     HotPartitionsError,
     #[error("disk config required when hot_partitions != max_partitions")]
     DiskConfigError,
+    #[error("error converting writable_window to u64")]
+    WritableWindowFormatError(TryFromIntError),
 }
 
 impl Config {
@@ -76,9 +73,16 @@ impl Config {
         if self.partition.hot_partitions < self.partition.max_partitions && self.disk.is_none() {
             return Err(ConfigError::DiskConfigError);
         }
-        let writable_window = self.partition.hot_partitions * self.partition.duration;
-        if self.insert_window > writable_window {
-            return Err(ConfigError::InsertWindowError);
+        if let Some(insert_bounds) = &self.insert_bounds {
+            if let Some(past) = insert_bounds.past {
+                let writable_window: u64 = (self.partition.hot_partitions
+                    * self.partition.duration)
+                    .try_into()
+                    .map_err(|e| ConfigError::WritableWindowFormatError(e))?;
+                if past > writable_window {
+                    return Err(ConfigError::InsertWindowError);
+                }
+            }
         }
         Ok(())
     }
@@ -173,9 +177,23 @@ impl StorageInner {
             None => vec![],
         };
 
+        let default_past: u64 = (config.partition.hot_partitions * config.partition.duration)
+            .try_into()
+            .map_err(|e| ConfigError::WritableWindowFormatError(e))?;
+        let insert_bounds = match config.insert_bounds {
+            Some(bounds) => Bounds {
+                past: Some(bounds.past.unwrap_or(default_past)),
+                future: bounds.future,
+            },
+            None => Bounds {
+                past: Some(default_past),
+                future: None,
+            },
+        };
+
         Ok(Self {
             partitions: RwLock::new(partitions),
-            insert_window: InsertWindow::new(config.insert_window),
+            insert_window: InsertWindow::new(insert_bounds),
             partition_config: config.partition,
             disk_config: config.disk.unwrap_or_default(),
         })
@@ -248,6 +266,8 @@ impl StorageInner {
         partitions: &mut RwLockWriteGuard<PartitionList>,
         row: &Row,
     ) -> Result<(), StorageError> {
+        // TODO: create partitions until we get one that can hold this timestamp
+        // TODO: set minimum timestamp to max of previous partition timestamp
         Ok(partitions.push(Box::new(MemoryPartition::new(
             Some(self.partition_config.duration),
             row,
@@ -419,6 +439,7 @@ pub mod tests {
     use crate::{
         metric::{DataPoint, Row},
         storage::{ConfigError, DiskConfig, PartitionConfig, StorageError},
+        window::Bounds,
     };
 
     use super::{Config, StorageInner};
@@ -488,7 +509,10 @@ pub mod tests {
                 hot_partitions: 2,
                 max_partitions: 2,
             },
-            insert_window: 5,
+            insert_bounds: Some(Bounds {
+                past: Some(5),
+                future: None,
+            }),
             ..Default::default()
         })
         .unwrap();
@@ -541,6 +565,62 @@ pub mod tests {
     }
 
     #[test]
+    fn test_storage_insert_window_future() {
+        let storage = StorageInner::new(Config {
+            partition: PartitionConfig {
+                duration: 100,
+                hot_partitions: 2,
+                max_partitions: 2,
+            },
+            insert_bounds: Some(Bounds {
+                past: None,
+                future: Some(10),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 10,
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 20,
+                value: 1.0,
+            },
+            DataPoint {
+                timestamp: 31, // Outside of future bounds (31-20)>=10
+                value: 0.0,
+            },
+        ];
+
+        match data_points.split_last() {
+            Some((out_of_bounds, elements)) => {
+                for data_point in elements {
+                    storage
+                        .insert(&Row {
+                            metric,
+                            data_point: *data_point,
+                        })
+                        .unwrap();
+                }
+                assert!(matches!(
+                    storage
+                        .insert(&Row {
+                            metric,
+                            data_point: *out_of_bounds
+                        })
+                        .err(),
+                    Some(StorageError::OutOfBounds)
+                ));
+            }
+            None => unreachable!(),
+        }
+    }
+
+    #[test]
     // The first timestamp sets the base minimum timestamp for the storage.
     // Not my favorite solution but before we have more partitions, we drop
     // any delayed timestamps.
@@ -551,7 +631,6 @@ pub mod tests {
                 hot_partitions: 2,
                 max_partitions: 2,
             },
-            insert_window: 5,
             ..Default::default()
         })
         .unwrap();
@@ -601,7 +680,6 @@ pub mod tests {
                 hot_partitions: 2,
                 max_partitions: 2,
             },
-            insert_window: 2,
             ..Default::default()
         })
         .unwrap();
@@ -651,7 +729,6 @@ pub mod tests {
                 data_path: data_path.clone(),
                 ..Default::default()
             }),
-            insert_window: 20,
             ..Default::default()
         })
         .unwrap();
@@ -760,7 +837,10 @@ pub mod tests {
                 data_path: String::from(""),
                 ..Default::default()
             }),
-            insert_window: 100,
+            insert_bounds: Some(Bounds {
+                past: Some(100),
+                future: None,
+            }),
             ..Default::default()
         });
         assert!(storage.is_err());
@@ -774,7 +854,6 @@ pub mod tests {
                 hot_partitions: 0,
                 max_partitions: 0,
             },
-            insert_window: 0,
             ..Default::default()
         };
         assert!(matches!(
@@ -791,7 +870,10 @@ pub mod tests {
                 hot_partitions: 10,
                 max_partitions: 10,
             },
-            insert_window: 200,
+            insert_bounds: Some(Bounds {
+                past: Some(200),
+                future: None,
+            }),
             ..Default::default()
         };
         assert!(matches!(
@@ -808,7 +890,6 @@ pub mod tests {
                 hot_partitions: 9,
                 max_partitions: 10,
             },
-            insert_window: 20,
             ..Default::default()
         };
         assert!(matches!(
@@ -858,7 +939,6 @@ pub mod tests {
                 data_path: String::from("tests/fixtures/test_open_existing_partitions"),
                 ..Default::default()
             }),
-            insert_window: 20,
             ..Default::default()
         })
         .unwrap();

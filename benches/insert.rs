@@ -3,7 +3,7 @@ use std::fs;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rstorage::{
     storage::{Config, DiskConfig, PartitionConfig, Storage},
-    DataPoint, EncodeStrategy, Row,
+    Bounds, DataPoint, EncodeStrategy, Row,
 };
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -20,7 +20,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                     data_path: data_path.clone(),
                     encode_strategy: EncodeStrategy::CSV,
                 }),
-                insert_window: 100,
+                insert_bounds: Some(Bounds {
+                    past: Some(100),
+                    future: None,
+                }),
                 sweep_interval: None,
             })
             .unwrap();
@@ -56,7 +59,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 data_path: data_path.clone(),
                 encode_strategy: EncodeStrategy::CSV,
             }),
-            insert_window: 100,
+            insert_bounds: Some(Bounds {
+                past: Some(100),
+                future: None,
+            }),
             sweep_interval: None,
         })
         .unwrap();
