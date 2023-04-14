@@ -151,8 +151,8 @@ pub fn flush(
     let mut writer = BufWriter::new(data);
     let mut metrics = HashMap::<String, MetricMetadata>::new();
     let mut total_data_points = 0;
-    let min_timestamp = partition.min_timestamp();
-    let max_timestamp = partition.max_timestamp();
+    let min_timestamp = partition.boundary().min_timestamp();
+    let max_timestamp = partition.boundary().max_timestamp();
     for x in partition.map.iter() {
         let (name, metric_entry) = x.pair();
         // Find the current offset in the file, since we don't know how much
@@ -268,11 +268,9 @@ pub mod tests {
             metric,
             data_point: d,
         });
-        let partition = MemoryPartition::new(Some(100), &rows[0]);
-        if let Some((_, remaining)) = rows.split_first() {
-            for row in remaining {
-                partition.insert(row).unwrap();
-            }
+        let partition = MemoryPartition::new(100, rows[0].data_point.timestamp);
+        for row in rows {
+            partition.insert(&row).unwrap();
         }
 
         let data_path = "./test_flush_data";

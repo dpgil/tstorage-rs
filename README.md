@@ -47,7 +47,7 @@ See the `examples/` directory for more examples using Storage.
 
 The database stores points in "partitions," which are time-based chunks responsible for all data points within a specific time range. Partitions can be "hot" (in memory, writable) or "cold" (on disk, read-only). When flushed to disk, all points in a partition are stored in the same file.
 
-The database maintains a list of partitions stored in ascending time range. When a data point is attempted to be inserted in the database, the responsible partition is found and the data point is inserted. If the data point is in the future relative to all parititons, a new partition is created. For example, suppose we have a storage instance that allows for 2 "hot" partitions, illustrated by the following:
+The database maintains a list of partitions stored in ascending time range. When a data point is attempted to be inserted in the database, the responsible partition is found and the data point is inserted. If the data point is in the future relative to all parititons, a new partition (or multiple new partitions) are created. For example, suppose we have a storage instance that allows for 2 "hot" partitions, illustrated by the following:
 
 ┌────────────────┐   ┌────────────────┐   ┌────────────────┐   ┌────────────────┐   ┌────────────────┐
 │                │   │                │   │                │   │                │   │                │
@@ -62,6 +62,8 @@ The database maintains a list of partitions stored in ascending time range. When
                                                                                            Writable
 
 Data points from t=300 to 500 would be inserted into one of the two memory partitions. An insert window can be set to further restrict tolerance for data points. If a data point were inserted with a timestamp beyond t=500, a new partition would be created to support that data point, and the partition responsible for points t=300 to 400 would no longer be writable and would soon be flushed (on the next `sweep_interval`).
+
+If a new partition were to be inserted with a timestamp t=750, for example, three new partitions would be created: one empty one for t=500 to 600, another empty one for t=600 to 700, and then one for t=700 to 800, where the point would be inserted. This can cause problems if a data point is inserted far into the future, so the database supports setting a limit on how far into the future a point can be inserted.
 
 The asynchronous loop that flushes partitions also handles partition expiry to avoid running out of memory or disk space. 
 Originally, partitions were flushed and expired synchronously when new partitions were created, but that ended up slowing insertion since the insert wouldn't complete until the new partition was created, a partition was flushed, and the oldest partition was deleted. Flushing partitions involves writing all data points in a partition to a file on disk which can be CPU intensive.
@@ -121,4 +123,14 @@ I may not want to allow a data point with timestamp=1 to be inserted for metricA
 
 #### Point far into the future
 
-If rstorage receives an anomalous data point far into the future, it'll create a new partition for it, and will make the old partitions unwritable, depending on the number of writable partitions. Ideally th system would provide an option to reject data points more than some time in the future, just like there's an insert window for old data points.
+If rstorage receives an anomalous data point far into the future, it'll create a new partition for it, and will make the old partitions unwritable, depending on the number of writable partitions. This means one bad data point far into the future could cause the system to expire all existing data points and reject other data points back at a more reasonable timestamp. For example, given a stream of data points with the following timestamps:
+```
+0 1 2 99 4 5 6 7
+```
+and a retention of 10, as soon as the data point at t=99 is received, then 4 5 6 7 will be rejected.
+
+To protect from this scenario, a restriction can be set on how far into the future a data point can be from the most recently written data point. An issue with this, however, is if the system doesn't receive points for a while (for legitimate reasons), and starts receiving points again, the system might think all valid points are too far into the future. For example, say the system receives the following data points:
+```
+0 1 2 <no metrics for a while> 20 21 22 23 ...
+```
+With a restriction on future inserts, it's possible every timestamp going forward gets rejected, completely locking up the system.

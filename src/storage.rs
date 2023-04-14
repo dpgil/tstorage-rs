@@ -266,12 +266,26 @@ impl StorageInner {
         partitions: &mut RwLockWriteGuard<PartitionList>,
         row: &Row,
     ) -> Result<(), StorageError> {
-        // TODO: create partitions until we get one that can hold this timestamp
-        // TODO: set minimum timestamp to max of previous partition timestamp
-        Ok(partitions.push(Box::new(MemoryPartition::new(
-            Some(self.partition_config.duration),
-            row,
-        ))))
+        let mut min_timestamp = match partitions.split_last() {
+            Some((last, _)) => last.boundary().max_timestamp(),
+            None => row.data_point.timestamp,
+        };
+        loop {
+            let partition = MemoryPartition::new(self.partition_config.duration, min_timestamp);
+            min_timestamp = partition.boundary().max_timestamp();
+            match partition.ordering(row) {
+                // Keep generating partitions until one fits this point.
+                PointPartitionOrdering::Future => partitions.push(Box::new(partition)),
+                PointPartitionOrdering::Current => {
+                    partition
+                        .insert(row)
+                        .map_err(|e| StorageError::FailedInsert(e))?;
+                    partitions.push(Box::new(partition));
+                    return Ok(());
+                }
+                PointPartitionOrdering::Past => return Err(StorageError::PartitionNotFound),
+            }
+        }
     }
 
     fn cascade_past_insert(
@@ -826,6 +840,46 @@ pub mod tests {
     }
 
     #[test]
+    fn test_storage_partition_bounds() {
+        let storage = StorageInner::new(Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 3,
+                max_partitions: 3,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 0, // start of 1st partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 12, // start of 2nd partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 10, // within insert window, but inserted "in between" partitions
+                value: 1.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&Row { metric, data_point }).unwrap();
+        }
+
+        let result = storage.select(&metric.to_string(), 0, 20).unwrap();
+
+        let mut expected = data_points.clone();
+        expected.sort_by_key(|d| d.timestamp);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
     fn test_storage_invalid_config() {
         let storage = StorageInner::new(Config {
             partition: PartitionConfig {
@@ -844,6 +898,47 @@ pub mod tests {
             ..Default::default()
         });
         assert!(storage.is_err());
+    }
+
+    #[test]
+    fn test_storage_skip_partitions() {
+        let storage = StorageInner::new(Config {
+            partition: PartitionConfig {
+                duration: 10,
+                hot_partitions: 3,
+                max_partitions: 3,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+        let metric = "hello";
+        let data_points = [
+            DataPoint {
+                timestamp: 0, // start of 1st partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 10, // start of 2nd partition
+                value: 0.0,
+            },
+            DataPoint {
+                timestamp: 90, // start of 10th partition, should trigger a bunch of partitions in between
+                value: 1.0,
+            },
+        ];
+
+        for data_point in data_points {
+            storage.insert(&Row { metric, data_point }).unwrap();
+        }
+        assert_eq!(storage.partitions.read().unwrap().len(), 10);
+
+        // select ignores expired partitions
+        let result = storage.select("hello", 0, 100).unwrap();
+        assert_eq!(result, vec![data_points[2]]);
+
+        storage.remove_expired_partitions().unwrap();
+        assert_eq!(storage.partitions.read().unwrap().len(), 3);
     }
 
     #[test]

@@ -64,33 +64,16 @@ impl Partition for MemoryPartition {
 }
 
 impl MemoryPartition {
-    // Requiring a row to initialize the partition makes the initialization uglier,
-    // but allows us to guarantee the partition boundaries in the rest of the code.
-    pub fn new(partition_duration: Option<i64>, initial_row: &Row) -> Self {
-        let partition_duration = partition_duration.unwrap_or(60000);
+    pub fn new(partition_duration: i64, min_timestamp: i64) -> Self {
         let partition_boundary = Boundary {
-            min_timestamp: initial_row.data_point.timestamp,
-            max_timestamp: initial_row.data_point.timestamp + partition_duration,
+            min_timestamp,
+            max_timestamp: min_timestamp + partition_duration,
         };
 
-        let map = dashmap::DashMap::new();
-        map.insert(
-            initial_row.metric.to_string(),
-            MetricEntry::new(initial_row.data_point),
-        );
-
         Self {
-            map,
+            map: dashmap::DashMap::new(),
             partition_boundary,
         }
-    }
-
-    pub fn min_timestamp(&self) -> i64 {
-        self.partition_boundary.min_timestamp
-    }
-
-    pub fn max_timestamp(&self) -> i64 {
-        self.partition_boundary.max_timestamp
     }
 }
 
@@ -194,14 +177,10 @@ pub mod tests {
 
     use super::MemoryPartition;
 
-    fn create_partition_with_rows(
-        partition_duration: Option<i64>,
-        rows: &[Row],
-    ) -> MemoryPartition {
+    fn create_partition_with_rows(partition_duration: i64, rows: &[Row]) -> MemoryPartition {
         assert!(!rows.is_empty());
-        let (first, rest) = rows.split_first().unwrap();
-        let partition = MemoryPartition::new(partition_duration, first);
-        for row in rest {
+        let partition = MemoryPartition::new(partition_duration, rows[0].data_point.timestamp);
+        for row in rows {
             partition.insert(row).unwrap();
         }
         partition
@@ -223,15 +202,9 @@ pub mod tests {
 
     #[test]
     fn test_min_max_timestamp() {
-        let metric = "hello";
-        let data_point = DataPoint {
-            timestamp: 1234,
-            value: 4.20,
-        };
-        let row = Row { metric, data_point };
-        let partition = MemoryPartition::new(Some(1000), &row);
-        assert_eq!(partition.min_timestamp(), 1234);
-        assert_eq!(partition.max_timestamp(), 2234);
+        let partition = MemoryPartition::new(1000, 1234);
+        assert_eq!(partition.boundary().min_timestamp(), 1234);
+        assert_eq!(partition.boundary().max_timestamp(), 2234);
     }
 
     #[test]
@@ -242,7 +215,8 @@ pub mod tests {
             value: 4.20,
         };
         let row = Row { metric, data_point };
-        let partition = MemoryPartition::new(None, &row);
+        let partition = MemoryPartition::new(60000, data_point.timestamp);
+        partition.insert(&row).unwrap();
         let result = partition.select(metric, 1000, 2000).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(data_point, result[0]);
@@ -270,7 +244,8 @@ pub mod tests {
             data_point: data_point_b,
         };
 
-        let partition = MemoryPartition::new(None, row_a);
+        let partition = MemoryPartition::new(60000, row_a.data_point.timestamp);
+        partition.insert(row_a).unwrap();
         partition.insert(row_b).unwrap();
 
         let result = partition.select(metric_a, 1000, 2000).unwrap();
@@ -292,7 +267,8 @@ pub mod tests {
                 value: 4.20,
             },
         };
-        let partition = MemoryPartition::new(None, &row);
+        let partition = MemoryPartition::new(60000, row.data_point.timestamp);
+        partition.insert(&row).unwrap();
         let result = partition.select(metric, 0, 1000).unwrap();
         assert_eq!(result.len(), 0);
     }
@@ -342,7 +318,7 @@ pub mod tests {
             })
             .collect();
 
-        let partition = create_partition_with_rows(None, &rows);
+        let partition = create_partition_with_rows(60000, &rows);
 
         let result = partition.select(metric, 200, 400).unwrap();
         assert_eq!(result, data_points[1..7]);
@@ -378,7 +354,7 @@ pub mod tests {
             })
             .collect();
 
-        let partition = create_partition_with_rows(None, &rows);
+        let partition = create_partition_with_rows(60000, &rows);
 
         let result = partition.select(metric, 101, 300).unwrap();
         assert_eq!(result, data_points[1..]);
@@ -410,7 +386,8 @@ pub mod tests {
             })
             .collect();
 
-        let partition = MemoryPartition::new(None, &rows[0]);
+        let partition = MemoryPartition::new(60000, rows[0].data_point.timestamp);
+        partition.insert(&rows[0]).unwrap();
         assert_eq!(
             partition.insert(&rows[1]).err(),
             Some(PartitionError::OutOfBounds)
@@ -451,7 +428,7 @@ pub mod tests {
             })
             .collect();
 
-        let partition = create_partition_with_rows(None, &rows);
+        let partition = create_partition_with_rows(60000, &rows);
         data_points.sort_by_key(|d| d.timestamp);
 
         let result = partition.select(metric, 0, 1000).unwrap();

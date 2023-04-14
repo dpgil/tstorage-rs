@@ -38,7 +38,9 @@ impl InsertWindow {
 
     fn past_contains(&self, timestamp: i64) -> bool {
         match self.bounds.past {
-            Some(p) => (self.max_timestamp.load(Ordering::SeqCst) - timestamp) <= p.try_into().unwrap(),
+            Some(p) => {
+                (self.max_timestamp.load(Ordering::SeqCst) - timestamp) <= p.try_into().unwrap()
+            }
             None => true,
         }
     }
