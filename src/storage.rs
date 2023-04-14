@@ -13,7 +13,10 @@ use log::error;
 use std::{
     num::TryFromIntError,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -117,6 +120,7 @@ pub enum StorageError {
 
 pub struct Storage {
     inner: Arc<StorageInner>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl Storage {
@@ -125,12 +129,16 @@ impl Storage {
 
         let storage = StorageInner::new(config)?;
         let inner = Arc::new(storage);
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         if let Some(sweep_interval) = osweep_interval {
             let inner_clone = inner.clone();
-            // TODO: add tripwire
+            let shutdown_clone = shutdown.clone();
             std::thread::spawn(move || {
                 loop {
+                    if shutdown_clone.load(Ordering::SeqCst) {
+                        break;
+                    }
                     std::thread::sleep(Duration::from_secs(sweep_interval));
                     // TODO: add timeouts
                     if let Err(e) = inner_clone.remove_expired_partitions() {
@@ -143,7 +151,7 @@ impl Storage {
             });
         }
 
-        Ok(Self { inner })
+        Ok(Self { inner, shutdown })
     }
 
     pub fn insert(&self, row: &Row) -> Result<(), StorageError> {
@@ -155,6 +163,7 @@ impl Storage {
     }
 
     pub fn close(&self) -> Result<(), StorageError> {
+        self.shutdown.store(true, Ordering::SeqCst);
         self.inner.remove_expired_partitions()?;
         // TODO: flush everything
         self.inner.flush_partitions()

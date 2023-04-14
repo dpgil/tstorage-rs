@@ -51,7 +51,7 @@ impl InsertWindow {
 
     pub fn update(&self, timestamp: i64) {
         self.max_timestamp
-            .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |x| {
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                 Some(i64::max(x, timestamp))
             })
             .unwrap();
