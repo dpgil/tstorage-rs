@@ -49,7 +49,7 @@ fn main() -> Result<(), StorageError> {
 
     storage.close()?;
 
-    // Uncomment this line to see the generated files on disk.
+    // Comment this line to see the generated files on disk.
     fs::remove_dir_all(data_path).unwrap();
     Ok(())
 }

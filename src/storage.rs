@@ -129,6 +129,12 @@ impl Storage {
     pub fn new(config: Config) -> Result<Self, StorageError> {
         let osweep_interval = config.sweep_interval;
 
+        let hot_partitions: usize = config
+            .partition
+            .hot_partitions
+            .try_into()
+            .map_err(|e| ConfigError::HotPartitionsFormatError(e))?;
+
         let storage = StorageInner::new(config)?;
         let inner = Arc::new(storage);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -136,6 +142,7 @@ impl Storage {
         if let Some(sweep_interval) = osweep_interval {
             let inner_clone = inner.clone();
             let shutdown_clone = shutdown.clone();
+
             std::thread::spawn(move || {
                 loop {
                     if shutdown_clone.load(Ordering::SeqCst) {
@@ -146,7 +153,7 @@ impl Storage {
                     if let Err(e) = inner_clone.remove_expired_partitions() {
                         error!("error removing expired partitions: {}", e);
                     }
-                    if let Err(e) = inner_clone.flush_partitions() {
+                    if let Err(e) = inner_clone.flush_partitions(hot_partitions) {
                         error!("error flushing partitions: {}", e);
                     }
                 }
@@ -167,8 +174,8 @@ impl Storage {
     pub fn close(&self) -> Result<(), StorageError> {
         self.shutdown.store(true, Ordering::SeqCst);
         self.inner.remove_expired_partitions()?;
-        // TODO: flush everything
-        self.inner.flush_partitions()
+        // No hot partitions, flush everything on close.
+        self.inner.flush_partitions(0)
     }
 }
 
@@ -338,15 +345,10 @@ impl StorageInner {
         }
     }
 
-    pub fn flush_partitions(&self) -> Result<(), StorageError> {
+    pub fn flush_partitions(&self, hot_partitions: usize) -> Result<(), StorageError> {
         // Grab the read lock to figure out which partitions need to be flushed.
         let partitions_to_swap: Vec<Option<Box<DiskPartition>>> = match self.partitions.read() {
             Ok(partitions) => {
-                let hot_partitions: usize = self
-                    .partition_config
-                    .hot_partitions
-                    .try_into()
-                    .map_err(|e| ConfigError::HotPartitionsFormatError(e))?;
                 partitions
                     .iter()
                     .enumerate()
@@ -745,10 +747,11 @@ pub mod tests {
     #[test]
     fn test_storage_memory_and_disk_partitions() {
         let data_path = String::from("./test_storage_memory_and_disk_partitions");
+        let hot_partitions = 2;
         let storage = StorageInner::new(Config {
             partition: PartitionConfig {
                 duration: 10,
-                hot_partitions: 2,
+                hot_partitions,
                 max_partitions: 10,
             },
             disk: Some(DiskConfig {
@@ -791,7 +794,9 @@ pub mod tests {
             storage.insert(&Row { metric, data_point }).unwrap();
         }
 
-        storage.flush_partitions().unwrap();
+        storage
+            .flush_partitions(hot_partitions.try_into().unwrap())
+            .unwrap();
         let result = storage.select(&metric.to_string(), 0, 40).unwrap();
 
         let expected = data_points.clone();
