@@ -55,6 +55,8 @@ pub enum ConfigError {
     NumPartitionsError,
     #[error("error converting hot_partitions to i64")]
     HotPartitionsFormatError(TryFromIntError),
+    #[error("error converting max_partitions to i64")]
+    MaxPartitionsFormatError(TryFromIntError),
     #[error("insert window is larger than writable window")]
     InsertWindowError,
     #[error("hot partitions must be greater than zero to support writing data")]
@@ -223,9 +225,13 @@ impl StorageInner {
         end: i64,
     ) -> Result<Vec<DataPoint>, StorageError> {
         let mut result = vec![];
+        let max_partitions: usize = self
+            .partition_config
+            .max_partitions
+            .try_into()
+            .map_err(|e| ConfigError::MaxPartitionsFormatError(e))?;
         for (i, partition) in partitions.iter().enumerate() {
-            // TODO: gracefully handle unwrap
-            if (partitions.len() - i) > self.partition_config.max_partitions.try_into().unwrap() {
+            if (partitions.len() - i) > max_partitions {
                 // Ignore expired partitions.
                 continue;
             }
@@ -336,14 +342,16 @@ impl StorageInner {
         // Grab the read lock to figure out which partitions need to be flushed.
         let partitions_to_swap: Vec<Option<Box<DiskPartition>>> = match self.partitions.read() {
             Ok(partitions) => {
-                Ok(partitions
+                let hot_partitions: usize = self
+                    .partition_config
+                    .hot_partitions
+                    .try_into()
+                    .map_err(|e| ConfigError::HotPartitionsFormatError(e))?;
+                partitions
                     .iter()
                     .enumerate()
                     .map(|(i, p)| {
-                        // TODO: gracefully handle unwrap
-                        if (partitions.len() - i)
-                            <= self.partition_config.hot_partitions.try_into().unwrap()
-                        {
+                        if (partitions.len() - i) <= hot_partitions {
                             // Hot partitions are not flushed.
                             return None;
                         }
@@ -363,10 +371,10 @@ impl StorageInner {
                             Err(_) => None,
                         }
                     })
-                    .collect())
+                    .collect()
             }
-            Err(_) => Err(StorageError::LockFailure),
-        }?;
+            Err(_) => return Err(StorageError::LockFailure),
+        };
 
         // Swap the in memory partitions with the flushed partitions.
         //
@@ -395,9 +403,8 @@ impl StorageInner {
         // Grab the read lock to figure out which partitions are expired.
         let remove_result: Vec<Option<Result<(), PartitionError>>> = match self.partitions.read() {
             Ok(partitions) => {
-                // TODO: handle error
-                let max_partitions: i64 = self.partition_config.max_partitions.try_into().unwrap();
-                let retention_boundary = max_partitions * self.partition_config.duration;
+                let retention_boundary =
+                    self.partition_config.max_partitions * self.partition_config.duration;
                 let remove_before = match partitions.last() {
                     Some(p) => Ok(p.boundary().max_timestamp() - retention_boundary),
                     None => Err(StorageError::EmptyPartitionList),
@@ -424,14 +431,10 @@ impl StorageInner {
                     .into_iter()
                     .enumerate()
                     .map(|(i, p)| {
-                        match remove_result.get(i) {
-                            // TODO: flatten this
+                        match &remove_result[i] {
                             Some(result) => match result {
-                                Some(result) => match result {
-                                    Ok(_) => None,     // successfully removed
-                                    Err(_) => Some(p), // failed to be removed, keep it to try again
-                                },
-                                None => Some(p), // wasn't considered to be removed
+                                Ok(_) => None,     // successfully removed
+                                Err(_) => Some(p), // failed to be removed, keep it to try again
                             },
                             None => Some(p), // wasn't considered to be removed
                         }
